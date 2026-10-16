@@ -57,6 +57,12 @@ attest overlays two graphs of the same program and aligns them.
      and their shapes), iterated so that the fingerprint captures structure a few
      hops out. Two functions with the same call-neighborhood fingerprint are
      structurally the same even if every identifier was renamed.
+   - **Seed-propagation for stripped binaries.** After the confident name and
+     unique-fingerprint matches (the "anchors"), alignment grows the mapping
+     outward: an unmatched node pairs with the one whose already-matched neighbors
+     best correspond, committed only when the choice is mutually unique. This
+     recovers interior structure when no symbols survive, at a lower confidence
+     tier, and still abstains on a tie rather than guessing.
    - **God-node anchoring.** The large, high-degree hubs of each graph (the "god
      nodes" graphify already identifies) are matched first and used as fixed
      reference points, so the rest of the alignment is constrained and does not

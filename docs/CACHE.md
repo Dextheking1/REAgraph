@@ -4,9 +4,10 @@ Status: the LOCAL cache ships. Content addressing (`reagraph.artifact`), the
 content-addressed store (`reagraph.cache`), the cache-aware wrapper
 (`reagraph.cached`), and cache-aware `reagraph pull` (default on; `--no-cache`,
 `--refresh`) are in the tree and tested: a repeat analysis of the same artifact
-is served with no REA call. The SHARED/remote tier (a backend that pools results
-across people and machines) is still roadmap, not shipped; it is described below
-with the privacy constraints it must respect.
+is served with no REA call. The SHARED tier has a shipped CLIENT backend
+(`reagraph.remote_cache`, read-only and privacy-guarded by default); the hosted
+SERVER it talks to is the next step, not yet built. Both are described below with
+the privacy constraints the shared tier must respect.
 
 ## Why a cache at all
 
@@ -97,15 +98,24 @@ downstream is unchanged.
 
 ## Local now, shared later
 
-The backend is pluggable behind the `CacheBackend` interface precisely so the
-store can move off the local machine later. `LocalCacheBackend` is the only backend
-in the design today.
+The backend is pluggable behind the `CacheBackend` interface so the store can move
+off the local machine. Two backends ship: `cache.LocalCacheBackend` (default) and
+`remote_cache.RemoteCacheBackend` — the client for a shared tier.
 
-A shared or remote backend — where a result computed on one machine is a hit on
-another — is on the roadmap. It is **not shipped and not implemented today**. The
-interface is shaped to allow it; the tier itself is future work. Treat any mention
-of a shared cache below as a design constraint for that future tier, not a
-description of current behavior.
+`RemoteCacheBackend` is **read-only by default**: it GETs from a shared store so
+you benefit from others' public analyses, and uploads nothing. Contributing is
+opt-in (`read_only=False`) and still gated by an `allow_push` flag/predicate that
+fails closed, so analysis of a private artifact is never uploaded by accident. It
+is fail-open: a down or slow shared store falls through to local, never raising.
+`remote_cache.TieredBackend(local, remote)` checks local first, then remote, and
+warms local on a remote hit. Point `pull` at it with
+`Cache(backend=remote_cache.RemoteCacheBackend(base_url, ...))`.
+
+What is NOT shipped: the hosted **server** that answers these requests. Its wire
+contract is documented on `RemoteCacheBackend`'s transport (a content-addressed
+byte store keyed by the same cache keys, with auth and a public/private visibility
+model backing the `allow_push` contribution flow). Building that server, with the
+privacy constraints below, is the next step.
 
 ## Privacy and safety for a future shared cache
 

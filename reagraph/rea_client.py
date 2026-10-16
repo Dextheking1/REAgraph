@@ -51,11 +51,12 @@ except ImportError:  # pragma: no cover - exercised only before the sibling land
 # via the constructor or the REAGRAPH_REA_CMD env var.
 DEFAULT_SERVER_CMD = ["npx", "-y", "rea-agents@latest"]
 
-# Sensible defaults for static JS / Electron analysis, which needs no Ghidra or
-# native disassembly. These are intersected with the server's actual ``list_tools``
-# and the adapter's ``SUPPORTED_TOOLS``, so a name REA does not offer is simply
-# skipped rather than fatal. Override via the ``tools=`` constructor argument.
-DEFAULT_TOOLS = ("analyze_app", "list_functions", "list_strings")
+# Default to REA's static JavaScript/Electron analysis tool (needs no Ghidra or
+# native disassembly) -- the one the adapter is grounded on (rea_adapter
+# .SUPPORTED_TOOLS). The set is intersected with the server's actual
+# ``list_tools`` and the adapter's ``SUPPORTED_TOOLS`` at call time, so a name
+# REA does not offer is simply skipped rather than fatal. Override via ``tools=``.
+DEFAULT_TOOLS = ("analyze_javascript_application",)
 
 
 class ReaClient:

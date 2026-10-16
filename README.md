@@ -64,6 +64,17 @@ findings accumulate.
   unsure), then reports the **shipped-but-unexplained** residual (the supply-chain
   signal) and a confidence-weighted **integrity score**. High-signal triage, not
   an oracle: "unexplained" means "could not confidently match", not "malicious".
+  Alignment uses seed-propagation to recover structure on stripped binaries, still
+  abstaining on ties.
+- `reagraph doctor` — preflight the live `pull`: checks `mcp`, `node`/`npx`, the
+  resolved REA command, and `graphify`, with actionable fixes. A clean doctor
+  means prerequisites are present, not that a real REA run was verified.
+
+The analysis cache backend is pluggable: `reagraph.remote_cache.RemoteCacheBackend`
+is a **shared-tier client** (read-only by default so you benefit from others'
+public analyses without uploading; opt-in push is gated so private artifacts
+never leak; fail-open). The hosted server it talks to is the next step, not yet
+built (see [docs/CACHE.md](docs/CACHE.md)).
 - `reagraph serve` — run the REAgraph **MCP server** (`remember` / `recall` /
   `diff` / `stats`) so any agent uses REAgraph as its reverse-engineering memory
   (needs the `mcp` package).

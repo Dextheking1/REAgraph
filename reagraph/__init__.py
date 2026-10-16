@@ -8,12 +8,13 @@ The two pieces that work today:
 from . import (
     memory, diff, ingest, summarize, coverage, bridge, serve,
     rea_adapter, rea_client, artifact, cache, cached,
-    fingerprint, align, attest,
+    fingerprint, align, attest, remote_cache, doctor,
 )
 
 __all__ = [
     "memory", "diff", "ingest", "summarize", "coverage",
     "bridge", "serve", "rea_adapter", "rea_client",
     "artifact", "cache", "cached", "fingerprint", "align", "attest",
+    "remote_cache", "doctor",
 ]
 __version__ = "0.0.1"

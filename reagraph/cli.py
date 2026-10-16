@@ -104,6 +104,12 @@ def _cmd_cache(args) -> int:
     return 0
 
 
+def _cmd_doctor(args) -> int:
+    from . import doctor
+    print(doctor.report())
+    return 0 if doctor.ready() else 1
+
+
 def _cmd_serve(args) -> int:
     # The MCP server resolves its graph via REAGRAPH_GRAPH; forward --graph.
     os.environ["REAGRAPH_GRAPH"] = args.graph
@@ -170,6 +176,9 @@ def build_parser() -> argparse.ArgumentParser:
     ca = sub.add_parser("cache", help="inspect or clear the content-addressed analysis cache")
     ca.add_argument("action", nargs="?", choices=["stats", "clear"], default="stats")
     ca.set_defaults(func=_cmd_cache)
+
+    dc = sub.add_parser("doctor", help="check prerequisites for live `reagraph pull` (mcp / node / REA)")
+    dc.set_defaults(func=_cmd_doctor)
 
     sv = sub.add_parser("serve", help="run the REAgraph MCP server (needs the 'mcp' package)")
     sv.add_argument("--graph", default=DEFAULT_GRAPH)

@@ -18,8 +18,19 @@ source survived compilation:
     (~0.70), which is exactly why we never hand back a bare mapping — every
     match carries its confidence so the caller can threshold it.
 
+  * When even the structural label is gone or diverges (the binary is stripped
+    *and* non-isomorphic to the source — inlining, extra stubs, a dead branch
+    removed — so a node's WL colour no longer equals its source twin's) we fall
+    back to SEED PROPAGATION. Starting from the confident name/WL matches as
+    anchors, we grow the mapping outward: a still-unmatched source node is paired
+    with the still-unmatched binary node whose set of *already-matched*
+    neighbours best corresponds (through the mapping we have so far). This is
+    weakest of all (~0.55-0.68) because it rests on the anchors rather than on
+    the node itself, so it sits below the structural tier.
+
 The one rule that keeps this trustworthy: when a key or a structural label is
-*ambiguous* (it occurs more than once on either side) we do NOT guess which of
+*ambiguous* (it occurs more than once on either side), or two propagation
+candidates tie for the best matched-neighbour overlap, we do NOT guess which of
 the candidates is the right one — we leave the node unmatched. A wrong
 cross-graph match is worse than an honest "don't know", so we abstain. Matching
 is one-to-one: every node is claimed by at most one node on the other side.
@@ -109,9 +120,31 @@ _GOD_NUDGE = 0.05        # structural match where both nodes are hubs
 _STRUCT_CAP = 0.94       # structure alone never reaches the name tier
 _BOTH_CAP = 0.99         # name + structure agreeing is our strongest match
 
+# Seed-propagation tier (below structure): matched purely by neighbourhood
+# correspondence to already-confident anchors, never on the node's own evidence.
+_PROP_CONF = 0.55          # base confidence for a propagated match
+_PROP_OVERLAP_STEP = 0.03  # per shared matched-neighbour beyond the first
+_PROP_DEGREE_NUDGE = 0.05  # propagated match whose total degrees also agree
+_PROP_CAP = 0.68           # propagation never reaches the structural tier (0.70)
+_PROP_MIN_OVERLAP = 1      # must share >=1 matched neighbour to pair at all
+
 
 def _node_ids(graph) -> list:
     return [n["id"] for n in graph.get("nodes", []) if "id" in n]
+
+
+def _neighbour_sets(graph) -> dict:
+    """{id: set(neighbour ids)} over BOTH directions (undirected adjacency),
+    used by seed propagation. Multiplicity is irrelevant here — we only ask
+    *which* neighbours a node has, to overlap them against the current mapping."""
+    nb: dict = {}
+    for e in graph.get("links", []) or graph.get("edges", []):
+        s, t = e.get("source"), e.get("target")
+        if s is None or t is None:
+            continue
+        nb.setdefault(s, set()).add(t)
+        nb.setdefault(t, set()).add(s)
+    return nb
 
 
 def _by_key(ids, key_of) -> dict:
@@ -218,6 +251,87 @@ def align(src, bing, *, min_confidence=0.5, wl_rounds=3) -> dict:
                 continue
             matches[sid] = {"bin": bid, "confidence": conf, "via": "structure"}
             matched_bin.add(bid)
+
+    # --- 3. SEED PROPAGATION: grow the mapping outward from the anchors above. ---
+    # An unmatched src node u is paired with the unmatched bin node v whose set of
+    # already-matched neighbours best corresponds to u's (mapped through the
+    # current matches). We commit only *mutual* unique bests — if u's best is v
+    # AND v's best (back among the unmatched src nodes) is u — which is
+    # order-independent and makes ties abstain on their own. Each committed pair
+    # becomes a new anchor, so we iterate to a fixed point (bounded by the node
+    # count). This recovers structure on stripped, non-isomorphic binaries where
+    # names are gone and WL colours have diverged.
+    if _PROP_CAP >= min_confidence:
+        src_nb = _neighbour_sets(src)
+        bin_nb = _neighbour_sets(bing)
+        src_deg = fingerprint.degrees(src)
+        bin_deg = fingerprint.degrees(bing)
+
+        def _mapped_anchor_set(u):
+            # Bin counterparts of u's currently-matched src neighbours.
+            return {matches[w]["bin"] for w in src_nb.get(u, ()) if w in matches}
+
+        def _matched_anchor_set(v):
+            # Matched bin neighbours of v (anchors already on the bin side).
+            return {x for x in bin_nb.get(v, ()) if x in matched_bin}
+
+        def _unique_best(want, candidates, overlap_of):
+            # Candidate with the single strictly-largest overlap (>= min); ties
+            # or an all-zero field -> None (abstain, do not guess).
+            best = None
+            best_ov = 0
+            tied = False
+            for c in candidates:
+                ov = len(want & overlap_of(c))
+                if ov > best_ov:
+                    best, best_ov, tied = c, ov, False
+                elif ov == best_ov and ov > 0:
+                    tied = True
+            if best is None or best_ov < _PROP_MIN_OVERLAP or tied:
+                return None, 0
+            return best, best_ov
+
+        for _ in range(len(src_ids) + 1):  # bounded; converges well before this
+            unmatched_src = [i for i in src_ids if i not in matches]
+            unmatched_bin = [i for i in bin_ids if i not in matched_bin]
+            if not unmatched_src or not unmatched_bin:
+                break
+
+            src_best: dict = {}
+            for u in unmatched_src:
+                want = _mapped_anchor_set(u)
+                if not want:
+                    continue
+                v, ov = _unique_best(want, unmatched_bin, _matched_anchor_set)
+                if v is not None:
+                    src_best[u] = (v, ov)
+
+            bin_best: dict = {}
+            for v in unmatched_bin:
+                want = _matched_anchor_set(v)
+                if not want:
+                    continue
+                u, _ov = _unique_best(want, unmatched_src, _mapped_anchor_set)
+                if u is not None:
+                    bin_best[v] = u
+
+            # Commit the mutual unique bests (deterministic, order-independent).
+            committed = False
+            for u in sorted(src_best, key=str):
+                v, ov = src_best[u]
+                if bin_best.get(v) != u:
+                    continue
+                conf = _PROP_CONF + _PROP_OVERLAP_STEP * (ov - 1)
+                if src_deg.get(u) == bin_deg.get(v):
+                    conf += _PROP_DEGREE_NUDGE
+                conf = round(min(conf, _PROP_CAP), 4)
+                if conf < min_confidence:
+                    continue
+                matches[u] = {"bin": v, "confidence": conf, "via": "propagation"}
+                matched_bin.add(v)
+                committed = True
+            if not committed:
+                break
 
     confs = [m["confidence"] for m in matches.values()]
     mean_conf = round(sum(confs) / len(confs), 4) if confs else 0.0
