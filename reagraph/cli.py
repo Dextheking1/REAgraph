@@ -3,18 +3,24 @@
     reagraph add <finding.jag.json> [--graph reagraph.json]
     reagraph diff <a.json> <b.json>
     reagraph stats [--graph reagraph.json]
-    reagraph query "<question>" [--graph reagraph.json]   # delegates to graphify
+    reagraph summary [--graph reagraph.json] [--top N]       # bounded map of a big graph
+    reagraph coverage [--graph reagraph.json]                # what's verified vs unverified
+    reagraph query "<question>" [--graph reagraph.json]      # delegates to graphify
+    reagraph serve [--graph reagraph.json]                   # run the MCP server
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 
+from . import coverage as coveragemod
 from . import diff as diffmod
 from . import memory
+from . import summarize as summarizemod
 from .ingest import load_any
 
 DEFAULT_GRAPH = "reagraph.json"
@@ -48,6 +54,24 @@ def _cmd_stats(args) -> int:
     return 0
 
 
+def _cmd_summary(args) -> int:
+    graph = memory.load(args.graph)
+    print(summarizemod.format_summary(summarizemod.summarize(graph, top=args.top)))
+    return 0
+
+
+def _cmd_coverage(args) -> int:
+    print(coveragemod.gaps_report(memory.load(args.graph)))
+    return 0
+
+
+def _cmd_serve(args) -> int:
+    # The MCP server resolves its graph via REAGRAPH_GRAPH; forward --graph.
+    os.environ["REAGRAPH_GRAPH"] = args.graph
+    from . import serve  # lazy: pulls in mcp only when actually serving
+    return serve.main()
+
+
 def _cmd_query(args) -> int:
     if not shutil.which("graphify"):
         print("graphify is not installed; install it to query the graph:\n"
@@ -75,10 +99,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--graph", default=DEFAULT_GRAPH)
     s.set_defaults(func=_cmd_stats)
 
+    sm = sub.add_parser("summary", help="bounded map (god nodes + clusters) of a big graph")
+    sm.add_argument("--graph", default=DEFAULT_GRAPH)
+    sm.add_argument("--top", type=int, default=20)
+    sm.set_defaults(func=_cmd_summary)
+
+    cv = sub.add_parser("coverage", help="what's observed vs inferred vs unverified (honest gaps)")
+    cv.add_argument("--graph", default=DEFAULT_GRAPH)
+    cv.set_defaults(func=_cmd_coverage)
+
     q = sub.add_parser("query", help="query the graph (delegates to graphify)")
     q.add_argument("question")
     q.add_argument("--graph", default=DEFAULT_GRAPH)
     q.set_defaults(func=_cmd_query)
+
+    sv = sub.add_parser("serve", help="run the REAgraph MCP server (needs the 'mcp' package)")
+    sv.add_argument("--graph", default=DEFAULT_GRAPH)
+    sv.set_defaults(func=_cmd_serve)
 
     return p
 

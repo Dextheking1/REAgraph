@@ -40,7 +40,19 @@ findings accumulate.
 - `reagraph diff A B` — a **structural** diff of two graphs by node/edge
   identity, immune to byte relocation. This is the fix for the #4520 class of
   bug: a module that only moved in the file reads as *unchanged*.
-- `reagraph stats` — coverage of the accumulated graph.
+- `reagraph summary` — a **bounded** map of a graph of any size (god nodes +
+  clusters), so a gigabyte-scale analysis becomes a short overview an agent can
+  actually read.
+- `reagraph coverage` — an **honest** verification report: what is observed vs
+  only inferred vs unverified, with the frontier of "probe here next" and the
+  explicit reminder that absence of a finding is not proof of absence.
+- `reagraph stats` — totals and confidence breakdown of the accumulated graph.
+- `reagraph serve` — run the REAgraph **MCP server** (`remember` / `recall` /
+  `diff` / `stats`) so any agent uses REAgraph as its reverse-engineering memory
+  (needs the `mcp` package).
+- `reagraph.bridge` — fold a live stream of findings in incrementally, saving
+  after each one (crash-safe) and skipping a bad finding instead of aborting the
+  run (so one malformed symbol never discards the whole analysis).
 
 ## Quickstart
 

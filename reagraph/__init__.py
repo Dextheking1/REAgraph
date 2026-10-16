@@ -5,7 +5,7 @@ The two pieces that work today:
   - `diff`:   structural, byte-agnostic diff of two graphs.
 """
 
-from . import memory, diff, ingest
+from . import memory, diff, ingest, summarize, coverage, bridge, serve
 
-__all__ = ["memory", "diff", "ingest"]
+__all__ = ["memory", "diff", "ingest", "summarize", "coverage", "bridge", "serve"]
 __version__ = "0.0.1"

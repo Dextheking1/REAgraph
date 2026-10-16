@@ -22,7 +22,16 @@ graph that makes a sensor's output *compound*.
 - `reagraph.ingest` — REA JAG (`epistemic`: observed/inferred/unavailable) ->
   graphify confidence; drops `unavailable`; preserves the original relation in
   `context` as `rea:<relation>`.
-- `reagraph` CLI — `add` / `diff` / `stats` / `query` (query delegates to graphify).
+- `reagraph.summarize` — bounded god-node + cluster overview for graphs of any
+  size (the fix for gigabyte-scale, undigestible output).
+- `reagraph.coverage` — honest observed/inferred/unverified report plus the
+  exploration frontier ("probe here next"); absence is never reported as proof.
+- `reagraph.bridge` — incremental live ingest: merge each finding as it lands,
+  save after every one (crash-safe), skip a bad finding instead of aborting.
+- `reagraph.serve` — MCP server (`remember` / `recall` / `diff` / `stats`); the
+  `mcp` package is lazy-imported so the rest of REAgraph works without it.
+- `reagraph` CLI — `add` / `diff` / `stats` / `summary` / `coverage` / `query`
+  (query delegates to graphify) / `serve`.
 
 The graph is written in graphify's node-link JSON, so `graphify query/path/explain
 --graph reagraph.json` works out of the box.
