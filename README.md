@@ -121,6 +121,29 @@ The agent probes with REA, folds each finding into REAgraph, and queries the
 accumulated graph *before* paying for another probe. Cost stops evaporating and
 starts compounding.
 
+## Benchmarks
+
+Reproducible harnesses in [`bench/`](bench/) (`python bench/bench_*.py`). Numbers
+below are from this machine; they are synthetic and machine-dependent, and the
+REA-call latency in the cache benchmark is modeled (real REA analyses take seconds
+to minutes), so treat them as orders of magnitude, not guarantees.
+
+- **Diff is byte-agnostic (the #4520 win).** On a build where every symbol's
+  location moved but the structure is identical: REAgraph reports **0% changed**;
+  a naive location-keyed diff reports **100% changed**.
+- **Alignment abstains instead of mis-matching.** Measured against generated
+  ground truth: **precision 1.00** both when symbols survive and when the binary is
+  stripped; recall **1.00** with symbols, **0.95** stripped (structure-only). All
+  injected nodes land in the residual (5/5 stripped, 6/6 tampered). Clean vs
+  tampered **integrity separation ~0.10** (0.99 vs 0.89).
+- **Summary stays bounded.** A 100k-node graph summarizes to **~1.4 KB** (god nodes
+  capped, clusters capped) in ~0.2 s.
+- **Scale.** merge ~2-4M nodes/s, diff ~1-3M nodes/s, summarize ~0.5-0.9M nodes/s;
+  align ~0.1M nodes/s (heavier: Weisfeiler-Lehman + propagation).
+- **Cache.** A repeat analysis is served with **no REA call**: a hit costs ~**90µs**
+  vs re-running the analysis. At a modeled 30 s/analysis over 10 repeats that is
+  **~270 s saved**; the win compounds across sessions, teammates, and CI.
+
 ## Roadmap
 
 See [docs/DESIGN.md](docs/DESIGN.md). Near-term: incremental live-ingest from the
