@@ -83,3 +83,21 @@ backend), and in CI.
 - **Numbers are machine-dependent.** Wall times, throughput, and hit latency
   depend on your CPU, disk, and load. Re-run locally rather than trusting the
   figures above; treat them as orders of magnitude, not guarantees.
+
+## bench_e2e.py (full workflow, end to end)
+
+`python bench/bench_e2e.py` runs the complete pipeline over a real MCP stdio
+transport -- the real reagraph client -> adapter -> bridge -> cache ->
+summarize / coverage / diff / attest -- timing each stage. The REA analysis engine
+is a stand-in MCP server (`bench/fake_rea_server_e2e.py`, which speaks real MCP and
+returns a realistic JavaScript Application Graph); set
+`REAGRAPH_REA_CMD="npx -y rea-agents@latest"` to run the identical workflow against
+real REA. Stages: pull v1 (cold) -> pull v1 (cache hit) -> summary -> coverage ->
+pull v2 -> diff v1/v2 -> attest v2 vs source (the v2 build carries an injected node
+that diff and attest must surface).
+
+Caveats: the analysis is a stand-in with a modeled latency (`REA_LATENCY`; real REA
+takes seconds to minutes). The cache win shown end to end is modest because both
+pulls still pay the MCP spawn/handshake even on a hit (skipping the spawn when every
+tool is already cached is a known optimization); the true win scales with real
+analysis latency, which `bench_cache.py` isolates.
