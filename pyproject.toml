@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reagraph"
+version = "0.0.1"
+description = "A persistent, queryable knowledge graph for reverse engineering (memory + structural diff for REA-style findings)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["reverse-engineering", "knowledge-graph", "mcp", "rea", "graphify", "binary-analysis"]
+authors = [{ name = "Graphify Labs" }]
+# Core is stdlib-only on purpose, so it installs and runs anywhere.
+dependencies = []
+
+[project.optional-dependencies]
+# query/path/explain over the accumulated graph are delegated to graphify.
+graphify = ["graphifyy"]
+
+[project.urls]
+Repository = "https://github.com/Graphify-Labs/REAgraph"
+
+[project.scripts]
+reagraph = "reagraph.cli:main"
+
+[tool.setuptools]
+packages = ["reagraph"]

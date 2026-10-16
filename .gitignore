@@ -1,0 +1,15 @@
+# Persistent graphs / analysis output (regenerated)
+reagraph.json
+*.jag.json
+graphify-out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+
+# OS / editors
+.DS_Store

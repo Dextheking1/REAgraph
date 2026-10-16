@@ -1,0 +1,14 @@
+REAgraph
+Copyright (c) 2026 Graphify Labs
+
+This product is an independent work. It is designed to interoperate with, but is
+NOT affiliated with, endorsed by, or derived from:
+
+  - REA ("Reverse Engineer Anything"), https://github.com/morluto/rea (MIT).
+    "REA" and any related marks belong to their respective owners. REAgraph
+    consumes REA's output formats; it includes no REA source code.
+  - graphify, https://github.com/Graphify-Labs/graphify (Apache-2.0). REAgraph
+    writes graphs in graphify's node-link JSON format and delegates query/path/
+    explain to graphify when it is installed.
+
+All trademarks are the property of their respective owners.
