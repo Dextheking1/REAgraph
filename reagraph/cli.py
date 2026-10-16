@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -65,6 +66,18 @@ def _cmd_coverage(args) -> int:
     return 0
 
 
+def _cmd_pull(args) -> int:
+    # Connect to a running/spawned REA MCP server, analyze the target, and fold
+    # each finding into the graph as it arrives (crash-safe, fail-open).
+    from . import bridge, rea_client
+    cmd = shlex.split(args.rea_cmd) if args.rea_cmd else None
+    client = rea_client.ReaClient(target=args.target, server_cmd=cmd)
+    s = bridge.ingest_stream(client, args.graph)
+    print(f"pulled from REA into {args.graph}: {s['nodes']} nodes, {s['edges']} edges "
+          f"(EXTRACTED {s['edge_confidence']['EXTRACTED']} / INFERRED {s['edge_confidence']['INFERRED']})")
+    return 0
+
+
 def _cmd_serve(args) -> int:
     # The MCP server resolves its graph via REAGRAPH_GRAPH; forward --graph.
     os.environ["REAGRAPH_GRAPH"] = args.graph
@@ -112,6 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("question")
     q.add_argument("--graph", default=DEFAULT_GRAPH)
     q.set_defaults(func=_cmd_query)
+
+    pl = sub.add_parser("pull", help="connect to REA, analyze a target, fold findings into the graph")
+    pl.add_argument("target", help="what REA should analyze (e.g. an unpacked app dir or file)")
+    pl.add_argument("--rea-cmd", default=None,
+                    help="override the REA MCP server command (else $REAGRAPH_REA_CMD, else npx rea-agents)")
+    pl.add_argument("--graph", default=DEFAULT_GRAPH)
+    pl.set_defaults(func=_cmd_pull)
 
     sv = sub.add_parser("serve", help="run the REAgraph MCP server (needs the 'mcp' package)")
     sv.add_argument("--graph", default=DEFAULT_GRAPH)

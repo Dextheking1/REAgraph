@@ -54,6 +54,16 @@ The graph is written in graphify's node-link JSON, so `graphify query/path/expla
    fingerprints, confidence-weighted) to answer "does shipped == source" — the
    residual (shipped-but-unexplained) is the supply-chain signal.
 
+## Future: optional acceleration (not now)
+
+The one compute-heavy step on the horizon is structural alignment / community
+detection / fingerprinting over million-node fused graphs (roadmap item 5). If
+that becomes the bottleneck, acceleration would be an OPTIONAL, subprocess-isolated
+backend, never a core dependency, so `pip install reagraph` stays stdlib-simple.
+Preferred order: mature graph-algorithm libraries first (rustworkx, igraph, or
+cuGraph on GPU); a massively-parallel runtime like Bend/HVM only if its model
+earns its keep, given its early stage and the JSON<->tiny-types interop cost.
+
 ## Non-goals / honesty
 
 - REAgraph does **not** decompile or reverse-engineer anything itself — it depends

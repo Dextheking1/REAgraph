@@ -47,6 +47,10 @@ findings accumulate.
   only inferred vs unverified, with the frontier of "probe here next" and the
   explicit reminder that absence of a finding is not proof of absence.
 - `reagraph stats` — totals and confidence breakdown of the accumulated graph.
+- `reagraph pull <target>` — connect to **REA** (spawned via `npx rea-agents`,
+  overridable with `$REAGRAPH_REA_CMD`), analyze a target, and fold each finding
+  into the graph as it arrives. REAgraph is an MCP *client* of REA; it vendors no
+  REA code. Degrades gracefully when REA or `mcp` is absent (use `reagraph add`).
 - `reagraph serve` — run the REAgraph **MCP server** (`remember` / `recall` /
   `diff` / `stats`) so any agent uses REAgraph as its reverse-engineering memory
   (needs the `mcp` package).
