@@ -51,6 +51,12 @@ findings accumulate.
   overridable with `$REAGRAPH_REA_CMD`), analyze a target, and fold each finding
   into the graph as it arrives. REAgraph is an MCP *client* of REA; it vendors no
   REA code. Degrades gracefully when REA or `mcp` is absent (use `reagraph add`).
+  A **content-addressed cache** (keyed by the artifact's hash + analysis scope)
+  serves a repeat analysis with **no REA call** (`--no-cache` / `--refresh` to
+  override). The cache is local today and the backend is pluggable so a shared
+  tier can drop in later.
+- `reagraph cache stats|clear` — inspect or wipe the local analysis cache
+  (`$REAGRAPH_CACHE`, default `~/.cache/reagraph`).
 - `reagraph serve` — run the REAgraph **MCP server** (`remember` / `recall` /
   `diff` / `stats`) so any agent uses REAgraph as its reverse-engineering memory
   (needs the `mcp` package).

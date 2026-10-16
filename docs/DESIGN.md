@@ -30,8 +30,13 @@ graph that makes a sensor's output *compound*.
   save after every one (crash-safe), skip a bad finding instead of aborting.
 - `reagraph.serve` — MCP server (`remember` / `recall` / `diff` / `stats`); the
   `mcp` package is lazy-imported so the rest of REAgraph works without it.
+- `reagraph.rea_client` / `reagraph.rea_adapter` — MCP client that connects to a
+  live REA and maps its JavaScript Application Graph output into fragments.
+- `reagraph.artifact` / `reagraph.cache` / `reagraph.cached` — content-addressed
+  analysis cache: a repeat analysis of the same artifact is served with no REA
+  call. Local backend today; the backend is pluggable for a future shared tier.
 - `reagraph` CLI — `add` / `diff` / `stats` / `summary` / `coverage` / `query`
-  (query delegates to graphify) / `serve`.
+  (query delegates to graphify) / `pull` (cache-aware) / `cache` / `serve`.
 
 The graph is written in graphify's node-link JSON, so `graphify query/path/explain
 --graph reagraph.json` works out of the box.
@@ -47,8 +52,11 @@ The graph is written in graphify's node-link JSON, so `graphify query/path/expla
    use REAgraph as its long-term RE memory directly.
 3. **Demand-scoped re-analysis.** Only re-reverse the region a query needs; never
    re-reverse what the graph already covers (`graph_stats` drives coverage).
-4. **Shared analysis cache, keyed by artifact hash.** The compounding asset and
-   the moat: every artifact anyone analyzes makes the next lookup instant.
+4. **Shared analysis cache, keyed by artifact hash.** The LOCAL cache ships (see
+   `reagraph.cache` and docs/CACHE.md): a repeat analysis of the same artifact is
+   served with no REA call. The SHARED/remote tier (pooling results across people
+   and machines) is the compounding moat and is still ahead; the backend is
+   pluggable for exactly this, and it must be opt-in to protect private artifacts.
 5. **Structural alignment to source.** Overlay a graphify *source* graph with a
    REA *binary* graph of the same program (god-node anchoring + community + WL
    fingerprints, confidence-weighted) to answer "does shipped == source" — the

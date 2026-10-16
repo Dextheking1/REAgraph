@@ -68,13 +68,30 @@ def _cmd_coverage(args) -> int:
 
 def _cmd_pull(args) -> int:
     # Connect to a running/spawned REA MCP server, analyze the target, and fold
-    # each finding into the graph as it arrives (crash-safe, fail-open).
+    # each finding into the graph as it arrives (crash-safe, fail-open). By
+    # default a content-addressed cache serves a repeat analysis with no REA call.
     from . import bridge, rea_client
     cmd = shlex.split(args.rea_cmd) if args.rea_cmd else None
-    client = rea_client.ReaClient(target=args.target, server_cmd=cmd)
+    cache = None
+    if not args.no_cache:
+        from . import cache as cachemod
+        cache = cachemod.Cache()
+    client = rea_client.ReaClient(target=args.target, server_cmd=cmd, cache=cache, refresh=args.refresh)
     s = bridge.ingest_stream(client, args.graph)
     print(f"pulled from REA into {args.graph}: {s['nodes']} nodes, {s['edges']} edges "
           f"(EXTRACTED {s['edge_confidence']['EXTRACTED']} / INFERRED {s['edge_confidence']['INFERRED']})")
+    return 0
+
+
+def _cmd_cache(args) -> int:
+    from . import cache as cachemod
+    c = cachemod.Cache()
+    if args.action == "clear":
+        n = c.clear()
+        print(f"cleared {n} cache entries from {c.stats()['dir']}")
+    else:
+        st = c.stats()
+        print(f"cache: {st['entries']} entries, {st['bytes']} bytes at {st['dir']}")
     return 0
 
 
@@ -131,7 +148,13 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--rea-cmd", default=None,
                     help="override the REA MCP server command (else $REAGRAPH_REA_CMD, else npx rea-agents)")
     pl.add_argument("--graph", default=DEFAULT_GRAPH)
+    pl.add_argument("--no-cache", action="store_true", help="always call REA, do not use the cache")
+    pl.add_argument("--refresh", action="store_true", help="re-analyze and overwrite cached results")
     pl.set_defaults(func=_cmd_pull)
+
+    ca = sub.add_parser("cache", help="inspect or clear the content-addressed analysis cache")
+    ca.add_argument("action", nargs="?", choices=["stats", "clear"], default="stats")
+    ca.set_defaults(func=_cmd_cache)
 
     sv = sub.add_parser("serve", help="run the REAgraph MCP server (needs the 'mcp' package)")
     sv.add_argument("--graph", default=DEFAULT_GRAPH)

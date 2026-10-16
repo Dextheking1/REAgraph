@@ -5,10 +5,14 @@ The two pieces that work today:
   - `diff`:   structural, byte-agnostic diff of two graphs.
 """
 
-from . import memory, diff, ingest, summarize, coverage, bridge, serve, rea_adapter, rea_client
+from . import (
+    memory, diff, ingest, summarize, coverage, bridge, serve,
+    rea_adapter, rea_client, artifact, cache, cached,
+)
 
 __all__ = [
     "memory", "diff", "ingest", "summarize", "coverage",
     "bridge", "serve", "rea_adapter", "rea_client",
+    "artifact", "cache", "cached",
 ]
 __version__ = "0.0.1"

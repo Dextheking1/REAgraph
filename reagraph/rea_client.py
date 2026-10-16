@@ -68,11 +68,18 @@ class ReaClient:
         *,
         server_cmd: Sequence[str] | None = None,
         tool_args: Mapping[str, Mapping] | None = None,
+        cache=None,
+        refresh: bool = False,
     ) -> None:
         self.target = target
         self.tools = tuple(tools) if tools is not None else DEFAULT_TOOLS
         self.server_cmd = self._resolve_cmd(server_cmd)
         self.tool_args = {k: dict(v) for k, v in (tool_args or {}).items()}
+        # Optional content-addressed cache (reagraph.cache.Cache). When set, a
+        # (artifact, tool, args) hit skips the REA call entirely; a miss stores
+        # the fragment after. refresh=True forces re-analysis past a hit.
+        self.cache = cache
+        self.refresh = refresh
 
     # -- construction helpers (no I/O, no process spawn) ------------------
 
@@ -123,8 +130,20 @@ class ReaClient:
                 continue  # REA did not offer this tool
             if supported and tool not in supported:
                 continue  # adapter cannot convert it
+            args = self._args_for(tool)
+            # Cache check: a hit means we never call REA for this artifact+tool.
+            key = None
+            if self.cache is not None and not self.refresh:
+                try:
+                    key = self.cache.key_for(self.target, tool, args)
+                    hit = self.cache.get(key)
+                except Exception:  # fail-open: a broken cache never blocks a pull
+                    key, hit = None, None
+                if hit:
+                    fragments.append(hit["fragment"])
+                    continue
             try:
-                result = await session.call_tool(tool, self._args_for(tool))
+                result = await session.call_tool(tool, args)
                 fragment = rea_adapter.to_fragment(tool, _result_payload(result))
             except Exception as exc:  # fail-open: skip one bad tool, keep going
                 print(
@@ -132,6 +151,12 @@ class ReaClient:
                     file=sys.stderr,
                 )
                 continue
+            if self.cache is not None:  # populate for next time (best-effort)
+                try:
+                    k = key if key is not None else self.cache.key_for(self.target, tool, args)
+                    self.cache.put(k, fragment, meta={"tool": tool, "target": self.target})
+                except Exception:
+                    pass
             fragments.append(fragment)
         return fragments
 
