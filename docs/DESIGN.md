@@ -35,8 +35,14 @@ graph that makes a sensor's output *compound*.
 - `reagraph.artifact` / `reagraph.cache` / `reagraph.cached` — content-addressed
   analysis cache: a repeat analysis of the same artifact is served with no REA
   call. Local backend today; the backend is pluggable for a future shared tier.
+- `reagraph.fingerprint` / `reagraph.align` / `reagraph.attest` — structural
+  source<->binary alignment and the "does shipped == source" attestation: match
+  by name where symbols survive, Weisfeiler-Lehman structure where they do not
+  (confidence-carrying, abstaining), then report the shipped-but-unexplained
+  residual and a confidence-weighted integrity score.
 - `reagraph` CLI — `add` / `diff` / `stats` / `summary` / `coverage` / `query`
-  (query delegates to graphify) / `pull` (cache-aware) / `cache` / `serve`.
+  (query delegates to graphify) / `pull` (cache-aware) / `cache` / `attest` /
+  `serve`.
 
 The graph is written in graphify's node-link JSON, so `graphify query/path/explain
 --graph reagraph.json` works out of the box.
@@ -57,10 +63,13 @@ The graph is written in graphify's node-link JSON, so `graphify query/path/expla
    served with no REA call. The SHARED/remote tier (pooling results across people
    and machines) is the compounding moat and is still ahead; the backend is
    pluggable for exactly this, and it must be opt-in to protect private artifacts.
-5. **Structural alignment to source.** Overlay a graphify *source* graph with a
-   REA *binary* graph of the same program (god-node anchoring + community + WL
-   fingerprints, confidence-weighted) to answer "does shipped == source" — the
-   residual (shipped-but-unexplained) is the supply-chain signal.
+5. **Structural alignment to source.** SHIPPED (see `reagraph.attest` and
+   docs/ATTEST.md): overlay a graphify *source* graph with a REA *binary* graph of
+   the same program (name + Weisfeiler-Lehman fingerprints + god-node anchoring,
+   confidence-weighted, abstaining) to answer "does shipped == source" — the
+   residual (shipped-but-unexplained) is the supply-chain signal. Next here:
+   harden the matcher on stripped native binaries and add community-level residual
+   clustering.
 
 ## Future: optional acceleration (not now)
 

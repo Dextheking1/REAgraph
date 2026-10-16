@@ -83,6 +83,15 @@ def _cmd_pull(args) -> int:
     return 0
 
 
+def _cmd_attest(args) -> int:
+    # Does the shipped artifact match the source? Structural source<->binary diff.
+    from . import attest
+    src = memory.load(args.source)
+    shipped = memory.load(args.shipped)
+    print(attest.format_report(attest.attest(src, shipped, min_confidence=args.min_confidence)))
+    return 0
+
+
 def _cmd_cache(args) -> int:
     from . import cache as cachemod
     c = cachemod.Cache()
@@ -151,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--no-cache", action="store_true", help="always call REA, do not use the cache")
     pl.add_argument("--refresh", action="store_true", help="re-analyze and overwrite cached results")
     pl.set_defaults(func=_cmd_pull)
+
+    at = sub.add_parser("attest", help="does the shipped artifact match the source? structural source<->binary diff")
+    at.add_argument("--source", required=True, help="graphify source graph (graph.json)")
+    at.add_argument("--shipped", required=True, help="REAgraph graph of the shipped artifact")
+    at.add_argument("--min-confidence", type=float, default=0.5, help="alignment confidence floor (abstain below)")
+    at.set_defaults(func=_cmd_attest)
 
     ca = sub.add_parser("cache", help="inspect or clear the content-addressed analysis cache")
     ca.add_argument("action", nargs="?", choices=["stats", "clear"], default="stats")

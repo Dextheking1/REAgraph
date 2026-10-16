@@ -57,6 +57,13 @@ findings accumulate.
   tier can drop in later.
 - `reagraph cache stats|clear` — inspect or wipe the local analysis cache
   (`$REAGRAPH_CACHE`, default `~/.cache/reagraph`).
+- `reagraph attest --source src.json --shipped shipped.json` — **does the shipped
+  artifact match the source?** Structurally aligns a graphify source graph with a
+  REAgraph shipped-artifact graph (name match where symbols survive, Weisfeiler-
+  Lehman fingerprints where they do not, carrying confidence and abstaining when
+  unsure), then reports the **shipped-but-unexplained** residual (the supply-chain
+  signal) and a confidence-weighted **integrity score**. High-signal triage, not
+  an oracle: "unexplained" means "could not confidently match", not "malicious".
 - `reagraph serve` — run the REAgraph **MCP server** (`remember` / `recall` /
   `diff` / `stats`) so any agent uses REAgraph as its reverse-engineering memory
   (needs the `mcp` package).
