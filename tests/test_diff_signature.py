@@ -116,6 +116,26 @@ def test_default_diff_is_unchanged_backcompat():
     assert d["summary"]["nodes_added"] == 0
 
 
+def test_ipc_channel_source_file_is_not_part_of_identity():
+    # An IPC channel spans main (handle) + preload (invoke); REA attributes the
+    # channel node to one file or the other from run to run. Its name is the
+    # stable identity, so a source-file flip on an untouched channel must NOT
+    # register as a change.
+    a = _graph([_n("a1", "ipc-channel", "notes:list", "src/preload.js")])
+    b = _graph([_n("z1", "ipc-channel", "notes:list", "src/main.js")])
+
+    sig = diff.diff(a, b, signature=diff.rea_signature)
+    assert sig["summary"]["nodes_added"] == 0
+    assert sig["summary"]["nodes_removed"] == 0
+    assert sig["summary"]["unchanged_nodes"] == 1
+
+    # A genuinely different channel name is still a change.
+    c = _graph([_n("z1", "ipc-channel", "notes:save", "src/main.js")])
+    sig2 = diff.diff(a, c, signature=diff.rea_signature)
+    assert sig2["summary"]["nodes_added"] == 1
+    assert sig2["summary"]["nodes_removed"] == 1
+
+
 def test_normalize_label_strips_only_ranges():
     assert diff.normalize_label("BrowserWindow@7:14-9:4") == "BrowserWindow"
     assert diff.normalize_label("handler@24:33-28:1") == "handler"

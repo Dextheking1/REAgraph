@@ -41,17 +41,33 @@ def normalize_label(label):
     return _LABEL_RANGE.sub("", label).strip()
 
 
+# Node kinds whose SOURCE FILE is not a stable part of their identity, because the
+# entity legitimately spans more than one file and REA attributes it to one or the
+# other from run to run. An Electron IPC channel is the canonical case: the same
+# channel is `ipcMain.handle(...)` in the main process and `ipcRenderer.invoke(...)`
+# in the preload, and REA may file the channel node under either. Its NAME (the
+# channel string) is the stable identity, so these kinds are keyed on kind+label
+# only -- including source_file would make an untouched channel flip add/remove.
+_LOCATION_UNSTABLE_KINDS = frozenset({"ipc-channel"})
+
+
 def rea_signature(node: dict) -> str:
-    """A build-stable signature for a REA node: kind + normalized label + source file.
+    """A build-stable signature for a REA node: kind + normalized label (+ source file).
 
     REA node_ids are not stable across builds; this signature is, because it is
     built from what the node MEANS (its kind, its symbol/label with any source
-    range normalized out, and the file it lives in) rather than how this build
-    happened to hash it. Used as ``diff(a, b, signature=rea_signature)`` to diff
-    two REA builds without the per-build id churn swamping the result.
+    range normalized out, and -- for file-local entities -- the file it lives in)
+    rather than how this build happened to hash it. For kinds that legitimately
+    span files and whose source attribution drifts between runs
+    (``_LOCATION_UNSTABLE_KINDS``, e.g. an IPC channel), the source file is left
+    OUT so an untouched entity is not reported as moved. Used as
+    ``diff(a, b, signature=rea_signature)`` to diff two REA builds without the
+    per-build id churn (or that attribution drift) swamping the result.
     """
     kind = node.get("rea_kind") or node.get("kind") or ""
     label = normalize_label(node.get("label") or "")
+    if kind in _LOCATION_UNSTABLE_KINDS:
+        return f"{kind}|{label}"
     source = node.get("source_file") or ""
     return f"{kind}|{label}|{source}"
 

@@ -74,23 +74,25 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from reagraph import memory
+from reagraph.diff import _LOCATION_UNSTABLE_KINDS
 from reagraph.diff import diff as structural_diff
 from reagraph.diff import normalize_label, rea_signature
 
 
 # -- descriptors ---------------------------------------------------------------
-# A descriptor is the stable, cross-build identity of a node: the fields REAgraph
-# stores regardless of where the bytes landed. Never crash on a missing field.
-# The label is range-normalized (reagraph.diff.normalize_label) so a symbol whose
-# source line:col merely shifted is still the same descriptor.
+# A descriptor is the stable, cross-build identity of a node -- the SAME identity
+# reagraph.diff's signature mode uses, so the benchmark's "true delta" is measured
+# against the stable identity (not the raw per-build id). The label is
+# range-normalized, and for kinds whose source attribution drifts between runs
+# (_LOCATION_UNSTABLE_KINDS, e.g. an IPC channel that spans main+preload) the
+# source file is left out -- exactly as rea_signature does. Never crashes.
 
 def descriptor(node: dict) -> tuple:
-    """The (rea_kind, normalized label, source_file) identity of a node."""
-    return (
-        node.get("rea_kind") or "",
-        normalize_label(node.get("label") or ""),
-        node.get("source_file") or "",
-    )
+    """The stable (rea_kind, normalized label, source_file-or-"") identity of a node."""
+    kind = node.get("rea_kind") or ""
+    label = normalize_label(node.get("label") or "")
+    source = "" if kind in _LOCATION_UNSTABLE_KINDS else (node.get("source_file") or "")
+    return (kind, label, source)
 
 
 def _sig_desc(sig_key: str) -> tuple:

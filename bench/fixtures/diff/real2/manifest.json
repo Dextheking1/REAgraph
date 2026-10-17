@@ -1,0 +1,8 @@
+{
+  "_comment": "Real REA graphs of a bigger (7-module) Electron app, generated via examples/rea-docker. Stress-tests the signature diff on harder cases. Note: REA models modules/imports/IPC/endpoints/windows, NOT individual function definitions, so a function-level change (movefunc) is below its node granularity and correctly reads as no change -- the diff must not hallucinate it.",
+  "pairs": [
+    {"name": "reorder",  "a": "graphs/base.json", "b": "graphs/reorder.json",  "note": "pure intra-file reorder of store.js -> ideal diff empty (the #4520 case at scale)"},
+    {"name": "addmod",   "a": "graphs/base.json", "b": "graphs/addmod.json",   "note": "added src/cache.js module + its import -> detected"},
+    {"name": "movefunc", "a": "graphs/base.json", "b": "graphs/movefunc.json", "note": "removed a helper FUNCTION (rand) -> below REA's node granularity, correctly 0"}
+  ]
+}
