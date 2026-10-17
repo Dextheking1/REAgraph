@@ -104,6 +104,19 @@ class ReaClient:
 
     def findings(self) -> Iterator[dict]:
         """Yield node-link fragments from a live REA run (bridge.ReaSource)."""
+        # Fast path: a fully-cached pull needs no REA process at all. If every
+        # requested tool is already cached we yield those fragments and RETURN
+        # WITHOUT spawning REA or even importing ``mcp`` (the spawn + handshake
+        # is ~300ms even when no analysis runs). Any miss (or nothing to
+        # pre-resolve) returns None and falls through to the normal
+        # connect+collect path, which still serves per-tool hits and caches
+        # misses.
+        cached = self._cached_only()
+        if cached is not None:
+            for fragment in cached:
+                yield fragment
+            return
+
         # Collected inside the live session, then yielded: the MCP session must
         # stay open while tools run. bridge.ingest_stream still saves after each
         # merge, so crash-safety is preserved as fragments are consumed.
@@ -111,6 +124,36 @@ class ReaClient:
 
         for fragment in asyncio.run(self._connect()):
             yield fragment
+
+    def _cached_only(self) -> list[dict] | None:
+        """Pre-resolve every requested tool against the cache, no spawn, no mcp.
+
+        Returns the cached fragments (in request order) only when EVERY requested
+        tool is already cached, so ``findings`` can serve a fully-cached pull
+        without touching REA. Returns None -- i.e. fall through to the live
+        connect+collect path -- when the cache is off or refreshing, when there
+        are no supported tools to pre-resolve, when any tool misses, or (fail
+        open) when the cache raises during the pre-check. Never spawns a process.
+        """
+        if self.cache is None or self.refresh:
+            return None
+        supported = set(getattr(rea_adapter, "SUPPORTED_TOOLS", set()) or ())
+        # Mirror collect(): intersect with the adapter's supported set when it is
+        # non-empty, else pre-resolve every requested tool.
+        tools = [t for t in self.tools if (t in supported if supported else True)]
+        if not tools:
+            return None  # nothing to pre-resolve -> let the normal path run
+        try:
+            fragments: list[dict] = []
+            for tool in tools:
+                key = self.cache.key_for(self.target, tool, self._args_for(tool))
+                hit = self.cache.get(key)
+                if not hit:
+                    return None  # a miss -> connect and run (serves other hits)
+                fragments.append(hit["fragment"])
+            return fragments
+        except Exception:  # fail-open: a broken cache never blocks a pull
+            return None
 
     # -- connection-INDEPENDENT logic (unit-tested with a fake session) ---
 
@@ -124,15 +167,33 @@ class ReaClient:
         """
         available = await self._list_tool_names(session)
         supported = set(getattr(rea_adapter, "SUPPORTED_TOOLS", set()) or ())
+        # Tolerant matching: REA's live tool id may use dashes
+        # ("analyze-javascript-application") while self.tools / SUPPORTED_TOOLS
+        # ground the underscore form. Compare under a normalization that treats
+        # '-' and '_' as equivalent and ignores case, but keep the SERVER's
+        # actual advertised name for call_tool and the ADAPTER's supported name
+        # for to_fragment, so the right id is called and the JAG mapping still
+        # applies. Exact-name servers are unaffected.
+        available_by_norm = {}
+        for name in available:
+            available_by_norm.setdefault(_normalize_tool(name), name)
+        supported_by_norm = {_normalize_tool(s): s for s in supported}
 
         fragments: list[dict] = []
         for tool in self.tools:
-            if tool not in available:
+            norm = _normalize_tool(tool)
+            server_name = available_by_norm.get(norm)
+            if server_name is None:
                 continue  # REA did not offer this tool
-            if supported and tool not in supported:
+            if supported and norm not in supported_by_norm:
                 continue  # adapter cannot convert it
+            # Name to hand the adapter: its grounded form when it supports this
+            # tool, else the requested name (to_fragment fails open regardless).
+            adapter_name = supported_by_norm.get(norm, tool)
             args = self._args_for(tool)
             # Cache check: a hit means we never call REA for this artifact+tool.
+            # Key on the requested name (stable across dashed/underscored
+            # servers and matching _cached_only's pre-check).
             key = None
             if self.cache is not None and not self.refresh:
                 try:
@@ -144,8 +205,8 @@ class ReaClient:
                     fragments.append(hit["fragment"])
                     continue
             try:
-                result = await session.call_tool(tool, args)
-                fragment = rea_adapter.to_fragment(tool, _result_payload(result))
+                result = await session.call_tool(server_name, args)
+                fragment = rea_adapter.to_fragment(adapter_name, _result_payload(result))
             except Exception as exc:  # fail-open: skip one bad tool, keep going
                 print(
                     f"reagraph.rea_client: skipped tool {tool}: {exc}",
@@ -197,6 +258,15 @@ class ReaClient:
                 "Install node/npx (the default uses 'npx') or set REAGRAPH_REA_CMD "
                 "to a working REA MCP server command."
             ) from exc
+
+
+def _normalize_tool(name) -> str:
+    """Normalize a tool name for tolerant matching: '-' == '_', case-insensitive.
+
+    Lets REA's dashed live id ("analyze-javascript-application") match the
+    adapter's underscore grounding ("analyze_javascript_application").
+    """
+    return str(name).replace("-", "_").lower()
 
 
 def _result_payload(result) -> dict:

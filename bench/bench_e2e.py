@@ -8,7 +8,7 @@ to run the identical workflow against the real REA instead.
 
 Stages timed:
   1. pull v1            (cold: spawn REA, analyze, ingest -> graph)   [1 analysis]
-  2. pull v1 again      (cache hit: analysis skipped)                 [0 analyses]
+  2. pull v1 (cached)   (fully cached -> no REA spawn, near-instant)  [0 analyses]
   3. summary            (bounded map of the graph)
   4. coverage           (observed vs inferred vs unverified)
   5. pull v2            (a changed build of the same app)             [1 analysis]
@@ -90,7 +90,7 @@ def main() -> int:
         s1, t1 = _timed("pull v1 (cold)", lambda: pull(str(app), g1))
         timings["1. pull v1 (cold, 1 analysis)"] = t1
         _, t2 = _timed("pull v1 (cached)", lambda: pull(str(app), g1))
-        timings["2. pull v1 (cache hit, 0 analyses)"] = t2
+        timings["2. pull v1 (fully cached -> no REA spawn)"] = t2
 
         gv1 = memory.load(g1)
         _, t3 = _timed("summary", lambda: summarize.summarize(gv1))
@@ -112,9 +112,30 @@ def main() -> int:
         for k, v in timings.items():
             print(f"  {k:<40} {v:8.1f} ms")
 
-        print("\nCACHE WIN (stage 1 cold vs stage 2 hit)")
+        print("\nCACHE WIN (stage 1 cold vs stage 2 fully-cached)")
         if t2 > 0:
-            print(f"  cold {t1:.0f} ms vs hit {t2:.0f} ms  ->  {t1 / t2:.1f}x faster, analysis call skipped")
+            print(f"  cold {t1:.0f} ms vs hit {t2:.0f} ms  ->  {t1 / t2:.1f}x faster")
+        # Expected behavior once the fast path lands: when every requested tool is
+        # already cached, findings() returns cached fragments WITHOUT spawning the
+        # REA MCP server, so the hit should be a tiny fraction of the cold time
+        # (single-digit ms) rather than paying ~300ms of spawn/handshake again.
+        #
+        # Verdict heuristic: a real no-spawn fast path collapses the hit to well
+        # under a quarter of the cold time. If the hit is still ~= cold minus the
+        # modeled analysis latency, REA was re-spawned (fast path absent/ineffective).
+        spawn_skipped = t2 < (t1 * 0.25)
+        try:
+            lat_ms = float(os.environ.get("REA_LATENCY", "0")) * 1000.0
+        except ValueError:
+            lat_ms = 0.0
+        print(f"  spawn skipped: {'YES' if spawn_skipped else 'NO'} "
+              f"(hit {t2:.0f} ms {'<' if spawn_skipped else '>='} 25% of cold {t1:.0f} ms)")
+        if spawn_skipped:
+            print("    -> fully-cached pull returned without spawning REA (fast path active).")
+        else:
+            print(f"    -> hit still carries spawn/handshake cost (~cold {t1:.0f} ms minus "
+                  f"~{lat_ms:.0f} ms analysis latency); REA was re-spawned (fast path "
+                  "not present / not effective).")
 
         print("\nRESULTS")
         print(f"  v1 graph : {memory.stats(gv1)['nodes']} nodes, {memory.stats(gv1)['edges']} edges")
