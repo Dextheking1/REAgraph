@@ -61,6 +61,36 @@ Against the real REA MCP server, `pull`:
   the failure is never folded as an evidence node and never cached, so a later
   run in a fixed environment re-attempts cleanly.
 
+## Running REA in Docker (a real graph from a Mac)
+
+REA's analyzer runs on Linux without the macOS Swift/xcrun helper that blocks it
+on an older Xcode toolchain, so a Linux container is the reproducible way to get a
+real graph from a Mac host. Verified end to end: `reagraph pull` through a REA
+container produced a real 56-node / 68-edge graph of a small Electron app. See
+[examples/rea-docker/](../examples/rea-docker/) for the image and the exact steps:
+build the image (node >= 24.11 plus `procps`, which REA needs to spawn its
+analyzer), pack your app into an ASAR, then point `--rea-cmd` at a `docker run`
+that mounts the artifact and starts the server, using the in-container path as the
+target:
+
+```bash
+REACMD="docker run --rm -i -v $PWD/out:/out:ro reagraph-rea:latest"
+reagraph pull /out/app.asar --rea-cmd "$REACMD" --graph app.json --no-cache
+```
+
+## Version diffing is not raw-build diffing
+
+REA's node identities are deliberately *artifact-version scoped*: a node id embeds
+the build's `artifact_sha256`, and some identity keys embed source line ranges, so
+the same logical module gets a different id in a different build. `reagraph diff`
+keys on identity, so diffing two raw REA builds **overstates** the change (it
+reports unchanged modules as removed+added). Diff is byte-agnostic for
+stable-identity graphs -- a graphify source graph, or the same build re-folded --
+which is the `attest` and dedup path it was built for. For authoritative
+cross-build comparison REA provides its own `compare_application_versions` tool;
+wiring a `reagraph compare` that delegates to it (as `query` delegates to graphify)
+is the honest fix and is tracked in the roadmap.
+
 ## Honest status
 
 The client, the result adapter (grounded on REA's JavaScript Application Graph

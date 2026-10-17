@@ -178,6 +178,80 @@ def test_unknown_tool_fails_open_to_single_evidence_node():
     assert memory.stats(merged)["nodes"] == 1
 
 
+def test_real_rea_nests_graph_under_normalized_result_graph():
+    # VERIFIED against real rea-agents output: analyze_javascript_application
+    # returns an Evidence envelope whose normalized_result carries the JAG one
+    # level deeper under `.graph` (alongside input_path/format/inventory ids), and
+    # a node's source file lives at evidence.location.value.source (a
+    # "source-range"), not `.path`. The adapter must find the nested graph and
+    # read the source. This is the exact shape that previously fell open to a
+    # single evidence node (the live "1 node, 0 edges" bug).
+    mod = "jag_node_" + "a" * 64
+    dep = "jag_node_" + "b" * 64
+
+    def _loc_source(src):
+        return {"available": True, "value": {"kind": "source-range", "source": src,
+                                             "start": {"line": 1, "column": 0}}}
+
+    def _ev(state, src):
+        return {"authority": "ast-static-analysis", "state": state,
+                "confidence": "exact" if state == "observed" else "low",
+                "artifact": {"available": True, "sha256": "c" * 64},
+                "location": _loc_source(src)}
+
+    graph = {
+        "schema": "JavaScriptApplicationGraph",
+        "graph_id": "jag_" + "7" * 64,
+        "root_node_ids": [mod],
+        "nodes": [
+            {"node_id": mod, "kind": "javascript-module",
+             "identity": {"strategy": "artifact-local-key", "key": "src/main.js"},
+             "observations": [{"label": "src/main.js", "properties": {},
+                               "evidence": _ev("observed", "src/main.js")}]},
+            {"node_id": dep, "kind": "javascript-module",
+             "identity": {"strategy": "artifact-local-key", "key": "external:fs"},
+             "observations": [{"label": "fs", "properties": {},
+                               "evidence": _ev("inferred", "src/store.js")}]},
+        ],
+        "edges": [
+            {"source_node_id": mod, "target_node_id": dep, "relation": "imports",
+             "properties": {}, "evidence": _ev("observed", "src/main.js")},
+        ],
+    }
+    # The real Evidence envelope: the graph is under normalized_result.graph.
+    envelope = {
+        "evidence_id": "ev_" + "0" * 64,
+        "operation": "analyze_javascript_application",
+        "normalized_result": {
+            "input_path": "/out/app.asar", "format": "asar",
+            "root_artifact_sha256": "d" * 64,
+            "graph": graph,
+        },
+    }
+
+    frag = rea_adapter.to_fragment("analyze_javascript_application", envelope)
+
+    # Found the nested graph (NOT a fail-open single evidence node).
+    assert len(frag["nodes"]) == 2
+    assert not any(n.get("file_type") == "evidence" for n in frag["nodes"])
+    by_label = {n["label"]: n for n in frag["nodes"]}
+    assert by_label["src/main.js"]["confidence"] == "EXTRACTED"   # observed
+    assert by_label["fs"]["confidence"] == "INFERRED"             # inferred
+    # source_file read from location.value.source.
+    assert by_label["src/main.js"]["source_file"] == "src/main.js"
+    assert by_label["fs"]["source_file"] == "src/store.js"
+    # The import edge carried through with its epistemic confidence + context.
+    assert len(frag["links"]) == 1
+    assert frag["links"][0]["relation"] == "imports"
+    assert frag["links"][0]["confidence"] == "EXTRACTED"
+    assert frag["links"][0]["context"] == "rea:imports"
+
+    # And it merges cleanly.
+    merged = memory.merge(memory.empty_graph(), frag)
+    assert memory.stats(merged)["nodes"] == 2
+    assert memory.stats(merged)["edges"] == 1
+
+
 def test_garbage_input_never_raises_and_fails_open():
     # Supported tool, but a totally unexpected shape -> fail open, no raise.
     for bad in [None, {}, {"unexpected": object()}, "not a dict", 42, []]:

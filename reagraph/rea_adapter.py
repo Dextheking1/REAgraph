@@ -96,20 +96,33 @@ def to_fragment(tool_name: str, result: dict) -> dict:
 def _find_jag(result: dict) -> dict | None:
     """Locate the JavaScript Application Graph inside a REA tool result.
 
-    Evidence-producing REA tools return the operation result under
-    `structuredContent.normalized_result`; we also accept the graph passed in
-    directly or lightly wrapped. Returns the graph dict or None.
+    Verified against real `rea-agents` output: `analyze_javascript_application`
+    returns an *Evidence envelope* whose operation payload is under
+    `normalized_result`, and the JAG itself is nested one level deeper under
+    `normalized_result.graph` (the envelope's normalized_result also carries
+    input_path/format/inventory ids, so it is NOT itself the graph). We therefore
+    probe each plausible base AND its `.graph` child, also accepting the graph
+    passed in directly or lightly wrapped under `structuredContent`. Returns the
+    graph dict or None.
     """
     structured = result.get("structuredContent")
-    candidates = [
+    bases = [
         result,
         result.get("normalized_result"),
         result.get("result"),
         structured if isinstance(structured, dict) else None,
         structured.get("normalized_result") if isinstance(structured, dict) else None,
     ]
+    candidates: list = []
+    for base in bases:
+        if not isinstance(base, dict):
+            continue
+        candidates.append(base)
+        nested = base.get("graph")  # REA's real nesting: ...normalized_result.graph
+        if isinstance(nested, dict):
+            candidates.append(nested)
     for cand in candidates:
-        if isinstance(cand, dict) and _looks_like_jag(cand):
+        if _looks_like_jag(cand):
             return cand
     return None
 
@@ -213,14 +226,21 @@ def _node_label(node: dict, nid: str) -> str:
 
 
 def _node_source_file(node: dict):
-    """Artifact path from the first observation's evidence location, if present."""
+    """Source path from the first observation's evidence location, if present.
+
+    Real REA locations are a ``source-range`` whose file is under
+    ``location.value.source`` (e.g. "src/store.js"); older/other shapes use
+    ``path``. Accept either so the node carries its origin file when known.
+    """
     for obs in node.get("observations", []) or []:
         if not isinstance(obs, dict):
             continue
         loc = (obs.get("evidence") or {}).get("location") if isinstance(obs.get("evidence"), dict) else None
         value = loc.get("value") if isinstance(loc, dict) else None
-        if isinstance(value, dict) and value.get("path"):
-            return value["path"]
+        if isinstance(value, dict):
+            src = value.get("source") or value.get("path")
+            if src:
+                return src
     return None
 
 
