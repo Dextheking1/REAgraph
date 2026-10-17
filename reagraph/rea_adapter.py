@@ -143,7 +143,15 @@ def _looks_like_jag(graph: dict) -> bool:
 
 
 def _map_jag(graph: dict) -> dict:
-    """Map a JAG graph to a node-link fragment. Each item is guarded; never raises."""
+    """Map a JAG graph to a node-link fragment. Each item is guarded; never raises.
+
+    Node ids are REA's own ``node_id`` (kept faithfully -- REA's ids are the
+    truth of a single analysis). REA's node_ids are NOT stable across builds, so
+    cross-build version diffing is done by SIGNATURE in ``reagraph.diff`` (see its
+    ``signature=`` mode), not by re-keying here, which would lose nodes to
+    collisions. Every node carries ``rea_kind`` + ``source_file``, which is what
+    the diff signature is built from.
+    """
     nodes = []
     for n in graph.get("nodes", []) or []:
         if not isinstance(n, dict):

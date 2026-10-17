@@ -1,0 +1,13 @@
+{
+  "_comment": "Real REA (rea-agents) JavaScript Application Graphs of a small Electron app, generated via examples/rea-docker. base vs four mutations. 'fmt' is byte-different but semantically identical (the #4520 case): ideal diff is empty.",
+  "pairs": [
+    {"name": "fmt",    "a": "graphs/base.json", "b": "graphs/fmt.json",
+     "note": "reformatted main.js, identical behavior -> ideal diff is empty"},
+    {"name": "feat",   "a": "graphs/base.json", "b": "graphs/feat.json",
+     "note": "added an exfil endpoint + its call in notes:save"},
+    {"name": "rename", "a": "graphs/base.json", "b": "graphs/rename.json",
+     "note": "renamed saveNote -> persistNote (export + call site)"},
+    {"name": "remove", "a": "graphs/base.json", "b": "graphs/remove.json",
+     "note": "removed the telemetry:send handler + its metrics endpoint"}
+  ]
+}

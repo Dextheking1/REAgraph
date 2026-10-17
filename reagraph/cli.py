@@ -44,7 +44,22 @@ def _cmd_add(args) -> int:
 def _cmd_diff(args) -> int:
     a = load_any(args.a)
     b = load_any(args.b)
-    print(diffmod.format_report(diffmod.diff(a, b)))
+    # Node identity regime. REA node_ids are not stable across builds, so diffing
+    # two REA builds by id reports the whole app as changed; matching by a
+    # build-stable signature (kind + range-normalized label + source file) fixes
+    # that. Default 'auto': use the signature when the graphs look like REA graphs
+    # (any node carries rea_kind), else id-key (correct for graphify/stable-id).
+    mode = getattr(args, "by", "auto")
+
+    def _is_rea(g):
+        return any(n.get("rea_kind") for n in g.get("nodes", []) if isinstance(n, dict))
+
+    if mode == "auto":
+        mode = "signature" if (_is_rea(a) or _is_rea(b)) else "id"
+    signature = diffmod.rea_signature if mode == "signature" else None
+    if mode == "signature":
+        print("(matching by build-stable signature: kind + label + source file)")
+    print(diffmod.format_report(diffmod.diff(a, b, signature=signature)))
     return 0
 
 
@@ -156,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("diff", help="structural (byte-agnostic) diff of two graphs")
     d.add_argument("a")
     d.add_argument("b")
+    d.add_argument("--by", choices=["auto", "id", "signature"], default="auto",
+                   help="node identity for matching: 'signature' (build-stable, for "
+                        "two REA builds), 'id' (stable-id graphs), or 'auto' (default)")
     d.set_defaults(func=_cmd_diff)
 
     s = sub.add_parser("stats", help="show accumulated-graph coverage")
