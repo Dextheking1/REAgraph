@@ -12,8 +12,11 @@ engine. It is designed to complement [REA](https://github.com/morluto/rea)
 [graphify](https://github.com/Graphify-Labs/graphify) (source → knowledge graph,
 Apache-2.0). It is **not affiliated with or endorsed by the REA project.**
 
-> Status: early. The two core pieces below work and are tested. The live REA
-> wiring and the MCP server are in progress (see `docs/DESIGN.md`).
+> Status: early. The core pieces below work and are tested. The live REA wiring
+> connects to the real REA MCP server (`npx rea-agents --mcp`), discovers its
+> tools, and calls `analyze_javascript_application` with the correct arguments;
+> a non-empty graph from the real analyzer needs a host meeting REA's own
+> Node/Swift requirements (see `docs/LIVE_PULL.md`). See `docs/DESIGN.md`.
 
 ## Why
 
@@ -47,10 +50,12 @@ findings accumulate.
   only inferred vs unverified, with the frontier of "probe here next" and the
   explicit reminder that absence of a finding is not proof of absence.
 - `reagraph stats` — totals and confidence breakdown of the accumulated graph.
-- `reagraph pull <target>` — connect to **REA** (spawned via `npx rea-agents`,
-  overridable with `$REAGRAPH_REA_CMD`), analyze a target, and fold each finding
-  into the graph as it arrives. REAgraph is an MCP *client* of REA; it vendors no
-  REA code. Degrades gracefully when REA or `mcp` is absent (use `reagraph add`).
+- `reagraph pull <target>` — connect to **REA** (spawned via `npx rea-agents
+  --mcp`, overridable with `$REAGRAPH_REA_CMD`), analyze a target, and fold each
+  finding into the graph as it arrives. REAgraph is an MCP *client* of REA; it
+  vendors no REA code. Degrades gracefully when REA or `mcp` is absent (use
+  `reagraph add`), and when REA itself returns an analysis error it reports it
+  and records nothing rather than folding a placeholder.
   A **content-addressed cache** (keyed by the artifact's hash + analysis scope)
   serves a repeat analysis with **no REA call** (`--no-cache` / `--refresh` to
   override). The cache is local today and the backend is pluggable so a shared

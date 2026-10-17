@@ -29,23 +29,48 @@ run has been verified.
 
 ```
 pip install mcp
-export REAGRAPH_REA_CMD="npx -y rea-agents@latest"   # or your REA MCP command
+# The default command already starts REA's MCP server (npx -y rea-agents@latest
+# --mcp). Override only if your REA lives elsewhere:
+export REAGRAPH_REA_CMD="npx -y rea-agents@latest --mcp"
 reagraph pull ./path/to/app            # folds findings into ./reagraph.json
 reagraph stats
 reagraph summary
 ```
 
-Static JavaScript/Electron analysis needs no native engine. Deep native analysis
-inherits REA's own requirements (Ghidra/Hopper/IDA) and setup.
+The `--mcp` flag is what makes REA start as an MCP *stdio server*; the bare CLI
+prints help and exits, so without it the handshake closes on connect. The default
+command includes it.
+
+Static JavaScript/Electron analysis needs no decompiler, but REA runs its own
+analyzer process and so inherits REA's runtime requirements: a recent **Node**
+(REA requires `^22.19 || ^24.11 || >=26`) and, on macOS, a **Swift 5.7+**
+toolchain (REA compiles a small process-ownership helper at analysis startup; an
+older Xcode Command Line Tools fails that compile). Deep native analysis
+additionally inherits REA's decompiler requirements (Ghidra/Hopper/IDA).
+
+## What a live pull does
+
+Against the real REA MCP server, `pull`:
+- spawns REA with `--mcp`, completes the MCP handshake, and lists its tools
+  (REA advertises ~200);
+- calls `analyze_javascript_application` with **`input_path`** (REA's required
+  argument name) pointing at an ASAR or an extracted JS/Electron app, and folds
+  the returned JavaScript Application Graph into `reagraph.json`;
+- if REA returns its structured `{"error": {...}}` body (e.g. the analyzer could
+  not start in your environment), prints the error and records **nothing** —
+  the failure is never folded as an evidence node and never cached, so a later
+  run in a fixed environment re-attempts cleanly.
 
 ## Honest status
 
 The client, the result adapter (grounded on REA's JavaScript Application Graph
 schema), the cache-aware pull, and the `doctor` preflight are in the tree and
-tested, and the full loop is exercised offline against a fake REA MCP server
-(`examples/fake_rea_mcp_server.py`, `examples/rea_live_demo.sh`). An end-to-end
-run against the real `npx rea-agents` has NOT been verified in this repo's CI (it
-needs Node, REA, and in the native case a decompiler). If you run it against real
-REA and hit a tool-name or output-shape mismatch, that is expected surface area:
-`rea_adapter` is best-effort and fail-open, and the default tool set is overridable
-with `tools=` / and the adapter's `SUPPORTED_TOOLS` is the source of truth.
+tested, and the full pipeline is exercised over a real MCP stdio transport
+against a stand-in REA server (`bench/fake_rea_server_e2e.py`) that returns a
+realistic JAG. The integration has been run against the real `npx rea-agents
+--mcp`: connect, tool discovery, and the `analyze_javascript_application` call
+with `input_path` are verified; a non-empty graph from the real analyzer needs a
+host that meets REA's Node/Swift requirements above (where those were unmet, REA
+returned its startup error and `pull` correctly reported 0 nodes). The adapter is
+best-effort and fail-open; the default tool set is overridable with `tools=`, and
+the adapter's `SUPPORTED_TOOLS` is the source of truth for what maps to a JAG.
