@@ -139,9 +139,15 @@ below are from this machine; they are synthetic and machine-dependent, and the
 REA-call latency in the cache benchmark is modeled (real REA analyses take seconds
 to minutes), so treat them as orders of magnitude, not guarantees.
 
-- **Diff is byte-agnostic (the #4520 win).** On a build where every symbol's
-  location moved but the structure is identical: REAgraph reports **0% changed**;
-  a naive location-keyed diff reports **100% changed**.
+- **Diff is byte-agnostic (the #4520 win) -- on REAL REA output.** Measured on
+  real `rea-agents` graphs of an Electron app (`bench/bench_diff_quality.py`,
+  fixtures in `bench/fixtures/diff/real`, generated via `examples/rea-docker`):
+  REA's node ids are per-build, so a naive id-keyed diff reports **73-80 of 56
+  nodes changed** on every build-pair. Matching by build-stable signature,
+  `reagraph diff` reports a reformatted-but-identical build as **0 changed** and
+  each real mutation (added endpoint / renamed function / removed handler) as
+  **exactly its true delta** -- precision/recall/**F1 = 1.00, noise floor 0.00**,
+  zero spurious changes, zero data loss.
 - **Alignment abstains instead of mis-matching.** Measured against generated
   ground truth: **precision 1.00** both when symbols survive and when the binary is
   stripped; recall **1.00** with symbols, **0.95** stripped (structure-only). All
