@@ -74,7 +74,7 @@ def test_fully_cached_pull_does_not_spawn(tmp_path, monkeypatch):
     cache = cachemod.Cache()
     # Pre-populate the cache for the default tool on this target.
     frag = {"nodes": [{"id": "main", "label": "main"}], "links": []}
-    key = cache.key_for(str(target), DEFAULT_TOOL, {"path": str(target)})
+    key = cache.key_for(str(target), DEFAULT_TOOL, {"input_path": str(target)})
     cache.put(key, frag, meta={"tool": DEFAULT_TOOL, "target": str(target)})
 
     # If _connect is ever reached, the fast path failed -> hard error.
@@ -97,7 +97,7 @@ def test_cached_only_returns_fragments_when_all_hit(tmp_path, monkeypatch):
 
     cache = cachemod.Cache()
     frag = {"nodes": [{"id": "main"}], "links": []}
-    key = cache.key_for(str(target), DEFAULT_TOOL, {"path": str(target)})
+    key = cache.key_for(str(target), DEFAULT_TOOL, {"input_path": str(target)})
     cache.put(key, frag, meta={})
 
     client = rea_client.ReaClient(target=str(target), tools=[DEFAULT_TOOL], cache=cache)
@@ -142,7 +142,7 @@ def test_refresh_bypasses_the_fast_path(tmp_path, monkeypatch):
 
     cache = cachemod.Cache()
     frag = {"nodes": [{"id": "main"}], "links": []}
-    key = cache.key_for(str(target), DEFAULT_TOOL, {"path": str(target)})
+    key = cache.key_for(str(target), DEFAULT_TOOL, {"input_path": str(target)})
     cache.put(key, frag, meta={})
 
     # Even with a full cache, refresh=True must force the live path.
@@ -166,7 +166,7 @@ def test_partial_cache_falls_through(tmp_path, monkeypatch):
         raising=False,
     )
     frag = {"nodes": [{"id": "main"}], "links": []}
-    key = cache.key_for(str(target), DEFAULT_TOOL, {"path": str(target)})
+    key = cache.key_for(str(target), DEFAULT_TOOL, {"input_path": str(target)})
     cache.put(key, frag, meta={})  # only the first tool is cached
 
     client = rea_client.ReaClient(
@@ -208,7 +208,7 @@ def test_collect_matches_dashed_server_name(monkeypatch):
 
     assert len(fragments) == 1
     # call_tool used the SERVER's actual advertised (dashed) id.
-    assert session.calls == [(DASHED_TOOL, {"path": "app.asar"})]
+    assert session.calls == [(DASHED_TOOL, {"input_path": "app.asar"})]
     # to_fragment was handed the adapter's grounded (underscore) name.
     assert fragments[0]["nodes"][0]["id"] == DEFAULT_TOOL
 
@@ -222,7 +222,7 @@ def test_collect_exact_underscore_still_works(monkeypatch):
     fragments = asyncio.run(client.collect(session))
 
     assert len(fragments) == 1
-    assert session.calls == [(DEFAULT_TOOL, {"path": "app.asar"})]
+    assert session.calls == [(DEFAULT_TOOL, {"input_path": "app.asar"})]
     assert fragments[0]["nodes"][0]["id"] == DEFAULT_TOOL
 
 
@@ -236,9 +236,112 @@ def test_collect_dashed_requested_name_also_matches(monkeypatch):
     fragments = asyncio.run(client.collect(session))
 
     assert len(fragments) == 1
-    assert session.calls == [(DASHED_TOOL, {"path": "app.asar"})]
+    assert session.calls == [(DASHED_TOOL, {"input_path": "app.asar"})]
     # Adapter is handed its grounded underscore name, not the dashed request.
     assert fragments[0]["nodes"][0]["id"] == DEFAULT_TOOL
+
+
+# -- FIX 3: REA structured error envelope is surfaced, not folded or cached ---
+
+
+class ErrorSession:
+    """A fake session whose call_tool returns REA's ``{"error": {...}}`` body."""
+
+    def __init__(self, names, envelope):
+        self.names = names
+        self.envelope = envelope
+        self.calls = []
+
+    async def list_tools(self):
+        return _Listed(self.names)
+
+    async def call_tool(self, name, args):
+        self.calls.append((name, args))
+        return self.envelope
+
+
+def test_collect_skips_rea_error_envelope_without_folding(monkeypatch):
+    # An error result must NOT reach the adapter (no opaque evidence node) and
+    # must NOT become a fragment.
+    called = {"n": 0}
+
+    def _count(*a, **k):
+        called["n"] += 1
+        return {"nodes": [{"id": "should-not-happen"}], "links": []}
+
+    monkeypatch.setattr(rea_client.rea_adapter, "to_fragment", _count, raising=False)
+    monkeypatch.setattr(
+        rea_client.rea_adapter, "SUPPORTED_TOOLS", {DEFAULT_TOOL}, raising=False
+    )
+    envelope = {
+        "error": {
+            "code": "execution_failure",
+            "message": "Analysis could not complete. Run `rea doctor`.",
+        }
+    }
+    client = rea_client.ReaClient("app.asar", tools=(DEFAULT_TOOL,))
+    session = ErrorSession([DEFAULT_TOOL], envelope)
+
+    fragments = asyncio.run(client.collect(session))
+
+    assert fragments == []  # an error is not a finding
+    assert called["n"] == 0  # the adapter is never invoked on an error
+    assert session.calls == [(DEFAULT_TOOL, {"input_path": "app.asar"})]
+
+
+def test_collect_error_envelope_is_not_cached(tmp_path, monkeypatch):
+    # A failed analysis must not be pinned in the cache as if it were a result.
+    target = tmp_path / "app.js"  # a real artifact: the cache hashes its bytes
+    target.write_text("console.log('hi')", encoding="utf-8")
+    monkeypatch.setenv("REAGRAPH_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        rea_client.rea_adapter, "SUPPORTED_TOOLS", {DEFAULT_TOOL}, raising=False
+    )
+    cache = cachemod.Cache()
+    envelope = {"error": {"code": "execution_failure", "message": "boom"}}
+
+    client = rea_client.ReaClient(str(target), tools=(DEFAULT_TOOL,), cache=cache)
+    fragments = asyncio.run(client.collect(ErrorSession([DEFAULT_TOOL], envelope)))
+
+    assert fragments == []
+    # The key the client would have used must still miss (nothing was stored).
+    key = cache.key_for(str(target), DEFAULT_TOOL, {"input_path": str(target)})
+    assert cache.get(key) is None
+
+
+def test_rea_error_detects_envelope_and_passes_valid_result():
+    assert rea_client._rea_error({"error": {"code": "x", "message": "m"}}) == "x: m"
+    assert rea_client._rea_error({"error": {"message": "only msg"}}) == "only msg"
+    assert rea_client._rea_error({"error": {"code": "only_code"}}) == "only_code"
+    # A genuine graph/result is never misread as an error.
+    assert rea_client._rea_error({"nodes": [], "edges": []}) is None
+    assert rea_client._rea_error({"error": "not a dict"}) is None
+    assert rea_client._rea_error("nope") is None
+    assert rea_client._rea_error({"error": {}}) is None
+
+
+# -- input_path argument name for analyze_javascript_application --------------
+
+
+def test_analyze_js_uses_input_path_arg():
+    # REA's analyze_javascript_application takes input_path, not the generic path.
+    client = rea_client.ReaClient("app.asar", tools=(DEFAULT_TOOL,))
+    assert client._args_for(DEFAULT_TOOL) == {"input_path": "app.asar"}
+    # A dashed request resolves to the same path-arg name.
+    assert client._args_for(DASHED_TOOL) == {"input_path": "app.asar"}
+    # An unmapped tool keeps the generic ``path`` arg.
+    assert client._args_for("list_strings") == {"path": "app.asar"}
+    # An explicit per-tool override still wins over the map.
+    client2 = rea_client.ReaClient(
+        "app.asar", tools=(DEFAULT_TOOL,), tool_args={DEFAULT_TOOL: {"input_path": "x", "detail": "summary"}}
+    )
+    assert client2._args_for(DEFAULT_TOOL) == {"input_path": "x", "detail": "summary"}
+
+
+def test_default_server_cmd_starts_mcp_server():
+    # The default command must include the flag that starts REA's MCP server;
+    # without it the bare CLI prints help and the handshake closes.
+    assert "--mcp" in rea_client.DEFAULT_SERVER_CMD
 
 
 # -- determinism + one-to-one unaffected -------------------------------------

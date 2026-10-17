@@ -76,15 +76,18 @@ def main() -> None:
 
     @server.tool(name="analyze_javascript_application",
                  description="Static analysis of a JS/Electron app -> JavaScript Application Graph (stand-in).")
-    def analyze_javascript_application(path: str = ".") -> str:  # noqa: D401
-        # Model REA's analysis latency (real REA takes seconds to minutes); 0 by default.
+    def analyze_javascript_application(input_path: str = ".") -> str:  # noqa: D401
+        # Arg name mirrors real REA's schema (required ``input_path``), so the
+        # real reagraph client drives this stand-in with the exact arguments it
+        # sends to REA. Model REA's analysis latency (real REA takes seconds to
+        # minutes); 0 by default.
         import os as _os
         import time as _time
         lat = float(_os.environ.get("REA_LATENCY", "0") or 0)
         if lat > 0:
             _time.sleep(lat)
         # Return the JAG as a JSON string; the reagraph client parses the text block.
-        return json.dumps(_jag_for(path))
+        return json.dumps(_jag_for(input_path))
 
     server.run(transport="stdio")
 

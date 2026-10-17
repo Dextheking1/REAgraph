@@ -47,9 +47,12 @@ except ImportError:  # pragma: no cover - exercised only before the sibling land
     rea_adapter.SUPPORTED_TOOLS = set()  # type: ignore[attr-defined]
 
 
-# npx-based default: run REA straight from npm with no local checkout. Override
-# via the constructor or the REAGRAPH_REA_CMD env var.
-DEFAULT_SERVER_CMD = ["npx", "-y", "rea-agents@latest"]
+# npx-based default: run REA straight from npm with no local checkout. The
+# ``--mcp`` flag is what makes REA start its MCP *stdio server* -- the bare CLI
+# prints help and exits, so without it the handshake closes on connect. Verified
+# against rea-agents (its ``--help`` lists ``--mcp`` as "Start as MCP stdio
+# server"). Override the whole command via the constructor or REAGRAPH_REA_CMD.
+DEFAULT_SERVER_CMD = ["npx", "-y", "rea-agents@latest", "--mcp"]
 
 # Default to REA's static JavaScript/Electron analysis tool (needs no Ghidra or
 # native disassembly) -- the one the adapter is grounded on (rea_adapter
@@ -57,6 +60,14 @@ DEFAULT_SERVER_CMD = ["npx", "-y", "rea-agents@latest"]
 # ``list_tools`` and the adapter's ``SUPPORTED_TOOLS`` at call time, so a name
 # REA does not offer is simply skipped rather than fatal. Override via ``tools=``.
 DEFAULT_TOOLS = ("analyze_javascript_application",)
+
+# The argument that carries the target path differs per REA tool. REA's
+# ``analyze_javascript_application`` takes ``input_path`` (verified against its
+# live input schema: required ``input_path``, "Local filesystem path for
+# input."), not the generic ``path``. Tools absent from this map fall back to
+# ``path``. A per-tool override via ``tool_args=`` still wins over both.
+_TOOL_PATH_ARG = {"analyze_javascript_application": "input_path"}
+_DEFAULT_PATH_ARG = "path"
 
 
 class ReaClient:
@@ -95,10 +106,18 @@ class ReaClient:
         return list(DEFAULT_SERVER_CMD)
 
     def _args_for(self, tool: str) -> dict:
-        """Call arguments for a tool: per-tool override, else the target path."""
+        """Call arguments for a tool: per-tool override, else the target path.
+
+        The path argument name is tool-specific (see ``_TOOL_PATH_ARG``): REA's
+        ``analyze_javascript_application`` wants ``input_path``, others default to
+        ``path``. Matching is normalization-tolerant so a dashed server id
+        ("analyze-javascript-application") still resolves to ``input_path``.
+        """
         if tool in self.tool_args:
             return dict(self.tool_args[tool])
-        return {"path": self.target}
+        norm = _normalize_tool(tool)
+        arg = _TOOL_PATH_ARG_NORM.get(norm, _DEFAULT_PATH_ARG)
+        return {arg: self.target}
 
     # -- ReaSource interface ---------------------------------------------
 
@@ -206,7 +225,29 @@ class ReaClient:
                     continue
             try:
                 result = await session.call_tool(server_name, args)
-                fragment = rea_adapter.to_fragment(adapter_name, _result_payload(result))
+                payload = _result_payload(result)
+            except Exception as exc:  # fail-open: skip one bad tool, keep going
+                print(
+                    f"reagraph.rea_client: skipped tool {tool}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+            # REA reports a failed analysis as a structured ``{"error": {...}}``
+            # envelope in the result body (not an MCP exception, isError unset),
+            # e.g. a provider that could not start. That is NOT a finding: folding
+            # it would record an opaque evidence node, and caching it would pin the
+            # failure as if it were a real analysis. Surface it and skip WITHOUT
+            # caching, so a later run (or a fixed environment) re-attempts cleanly.
+            rea_err = _rea_error(payload)
+            if rea_err is not None:
+                print(
+                    f"reagraph.rea_client: REA tool {tool} returned an error "
+                    f"(not cached): {rea_err}",
+                    file=sys.stderr,
+                )
+                continue
+            try:
+                fragment = rea_adapter.to_fragment(adapter_name, payload)
             except Exception as exc:  # fail-open: skip one bad tool, keep going
                 print(
                     f"reagraph.rea_client: skipped tool {tool}: {exc}",
@@ -253,11 +294,65 @@ class ReaClient:
                     await session.initialize()
                     return await self.collect(session)
         except FileNotFoundError as exc:
+            # The binary/npx itself is missing: a spawn failure, not a handshake
+            # failure. Keep the specific, pre-existing actionable message.
             raise RuntimeError(
                 f"could not launch REA MCP server {self.server_cmd!r}: {exc}. "
                 "Install node/npx (the default uses 'npx') or set REAGRAPH_REA_CMD "
                 "to a working REA MCP server command."
             ) from exc
+        except _HANDSHAKE_ERRORS as exc:
+            # The server spawned, but the MCP connection/handshake failed: an
+            # MCPError, an anyio/asyncio ExceptionGroup (common when the stdio
+            # peer closes during initialize), a ConnectionError/OSError, a
+            # timeout, or any other error raised during connect/initialize. The
+            # raw ExceptionGroup/MCPError traceback is unreadable to a user, so
+            # collapse it into one actionable RuntimeError, surfacing the first
+            # underlying cause for context.
+            cause = _first_cause(exc)
+            raise RuntimeError(
+                "could not complete the REA MCP handshake for "
+                f"{' '.join(self.server_cmd)}: {cause}. The server started but "
+                "the MCP connection closed during initialize. Check that the "
+                "command actually starts an MCP stdio server (REA may need a "
+                "specific subcommand, e.g. an 'mcp' server command, not the bare "
+                "CLI), that REA is set up (`rea setup`), and that your Node "
+                "version meets REA's requirement. Override the command with "
+                "REAGRAPH_REA_CMD."
+            ) from exc
+
+
+# Errors that mean "the server spawned but the MCP connect/handshake failed".
+# ``Exception`` already covers MCPError, ConnectionError, OSError (minus the
+# FileNotFoundError spawn case handled first), asyncio.TimeoutError, and the
+# ``exceptiongroup`` backport's ExceptionGroup (which subclasses Exception). On
+# Python 3.11+ a task group may raise a bare ``BaseExceptionGroup`` (BaseException,
+# not Exception), so add it when the name exists; guarded so <3.11 stays valid.
+_HANDSHAKE_ERRORS: tuple = (Exception,)
+try:  # pragma: no cover - the extra arm only exists on Python 3.11+
+    _HANDSHAKE_ERRORS = (Exception, BaseExceptionGroup)  # type: ignore[name-defined]
+except NameError:  # pragma: no cover - Python < 3.11 has no BaseExceptionGroup
+    pass
+
+
+def _first_cause(exc: BaseException) -> str:
+    """Readable message for ``exc``, unwrapping ExceptionGroups to the first leaf.
+
+    A raw ``ExceptionGroup``/``BaseExceptionGroup`` stringifies to an unhelpful
+    "(1 sub-exception)" summary, so descend into its first sub-exception (deeply,
+    in case groups nest) and return that leaf's message. Plain exceptions pass
+    through as ``str(exc)``. Deterministic: always the first branch.
+    """
+    cur: BaseException = exc
+    seen: set[int] = set()
+    while True:
+        subs = getattr(cur, "exceptions", None)
+        if not subs or id(cur) in seen:
+            break
+        seen.add(id(cur))
+        cur = subs[0]
+    text = str(cur).strip()
+    return text or cur.__class__.__name__
 
 
 def _normalize_tool(name) -> str:
@@ -267,6 +362,47 @@ def _normalize_tool(name) -> str:
     adapter's underscore grounding ("analyze_javascript_application").
     """
     return str(name).replace("-", "_").lower()
+
+
+# ``_TOOL_PATH_ARG`` keyed under the same normalization used for tool matching,
+# so a dashed/underscored/mixed-case server id still resolves to the right path
+# argument name. Built once at import, after ``_normalize_tool`` is defined.
+_TOOL_PATH_ARG_NORM = {_normalize_tool(k): v for k, v in _TOOL_PATH_ARG.items()}
+
+
+def _rea_error(payload) -> str | None:
+    """A short message if ``payload`` is REA's structured error envelope, else None.
+
+    REA signals a failed operation with a top-level ``error`` object carrying a
+    ``code`` and a human ``message`` (and often a ``remediation``), returned as the
+    tool result body rather than as an MCP exception. Example (abridged)::
+
+        {"error": {"code": "execution_failure",
+                   "message": "Analysis could not complete. Run `rea doctor` ...",
+                   "remediation": {"action": "..."}, "details": {...}}}
+
+    Returns ``"<code>: <message>"`` (message trimmed) when that shape is present,
+    else None. Best-effort and never raises: a malformed envelope yields None so a
+    genuine result is never misread as an error.
+    """
+    try:
+        if not isinstance(payload, dict):
+            return None
+        err = payload.get("error")
+        if not isinstance(err, dict):
+            return None
+        code = err.get("code")
+        message = err.get("message")
+        if message is None and code is None:
+            return None
+        msg = str(message).strip() if message is not None else ""
+        if len(msg) > 300:
+            msg = msg[:299] + "…"
+        if code and msg:
+            return f"{code}: {msg}"
+        return str(code) if code else msg
+    except Exception:
+        return None
 
 
 def _result_payload(result) -> dict:
