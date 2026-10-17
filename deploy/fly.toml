@@ -1,0 +1,40 @@
+# Fly.io config for the REAgraph shared-cache server.
+# Reference deployment, not an officially hosted instance.
+#
+# Deploy from the repo root so the Docker build context is the repo root:
+#   fly deploy -c deploy/fly.toml
+#
+# Always set a write token before exposing this to the internet:
+#   fly secrets set REAGRAPH_CACHE_WRITE_TOKEN=... [--config deploy/fly.toml]
+# Optionally gate reads too:
+#   fly secrets set REAGRAPH_CACHE_READ_TOKEN=...
+
+app = "reagraph-cache"
+primary_region = "iad"
+
+[build]
+  # Path is relative to the build context (the repo root).
+  dockerfile = "deploy/Dockerfile"
+
+[env]
+  REAGRAPH_CACHE_SERVER_DIR = "/data"
+
+# Persist the content-addressed cache on a volume. Create it once with:
+#   fly volumes create reagraph_cache_data --size 1 --region iad
+[mounts]
+  source = "reagraph_cache_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"

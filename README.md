@@ -78,8 +78,14 @@ findings accumulate.
 The analysis cache backend is pluggable: `reagraph.remote_cache.RemoteCacheBackend`
 is a **shared-tier client** (read-only by default so you benefit from others'
 public analyses without uploading; opt-in push is gated so private artifacts
-never leak; fail-open). The hosted server it talks to is the next step, not yet
-built (see [docs/CACHE.md](docs/CACHE.md)).
+never leak; fail-open). Compose it local-first with `TieredBackend` (warms the
+local tier on a remote hit). See [docs/CACHE.md](docs/CACHE.md).
+- `reagraph serve-cache` — run the **shared-cache server** the client above talks
+  to: a stdlib HTTP service over the same content-addressed store, with public
+  read / token-gated write (tokens from the environment, never argv), a sha256
+  key allowlist (its own path-traversal defense), an upload size cap, and
+  cache-entry-shape validation. See [docs/CACHE_SERVER.md](docs/CACHE_SERVER.md)
+  and a reference Docker/Fly deployment in [deploy/](deploy/).
 - `reagraph serve` — run the REAgraph **MCP server** (`remember` / `recall` /
   `diff` / `stats`) so any agent uses REAgraph as its reverse-engineering memory
   (needs the `mcp` package).
@@ -151,9 +157,10 @@ to minutes), so treat them as orders of magnitude, not guarantees.
 
 ## Roadmap
 
-See [docs/DESIGN.md](docs/DESIGN.md). Near-term: incremental live-ingest from the
-REA MCP server, an MCP server exposing the memory to agents, demand-scoped
-re-analysis, and a shared analysis cache keyed by artifact hash.
+See [docs/DESIGN.md](docs/DESIGN.md). The MCP server, live-ingest from REA, and the
+shared analysis cache (client + `reagraph serve-cache` server, keyed by artifact
+hash) are in the tree. Near-term: demand-scoped re-analysis, a hosted community
+cache instance, and harder attestation on stripped native binaries.
 
 ## License
 

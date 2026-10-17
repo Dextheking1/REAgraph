@@ -117,6 +117,24 @@ def _cmd_serve(args) -> int:
     return serve.main()
 
 
+def _cmd_serve_cache(args) -> int:
+    from . import cache_server
+    # Tokens are sourced from the environment ONLY (never a CLI arg: argv leaks
+    # via `ps`), mirroring cache_server.main's posture.
+    read_token = os.environ.get(cache_server.ENV_READ_TOKEN) or None
+    write_token = os.environ.get(cache_server.ENV_WRITE_TOKEN) or None
+    cache_server.serve(
+        host=args.host,
+        port=args.port,
+        directory=args.dir,
+        read_token=read_token,
+        write_token=write_token,
+        max_value_bytes=int(args.max_value_mb * 1024 * 1024),
+        validate_payload=not args.no_validate_payload,
+    )
+    return 0
+
+
 def _cmd_query(args) -> int:
     if not shutil.which("graphify"):
         print("graphify is not installed; install it to query the graph:\n"
@@ -183,6 +201,19 @@ def build_parser() -> argparse.ArgumentParser:
     sv = sub.add_parser("serve", help="run the REAgraph MCP server (needs the 'mcp' package)")
     sv.add_argument("--graph", default=DEFAULT_GRAPH)
     sv.set_defaults(func=_cmd_serve)
+
+    sc = sub.add_parser("serve-cache",
+                        help="run the shared analysis-cache HTTP server "
+                             "(tokens from $REAGRAPH_CACHE_READ_TOKEN / _WRITE_TOKEN)")
+    sc.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
+    sc.add_argument("--port", type=int, default=8787, help="bind port (default 8787)")
+    sc.add_argument("--dir", default=None,
+                    help="store directory (default $REAGRAPH_CACHE_SERVER_DIR or the cache default)")
+    sc.add_argument("--max-value-mb", type=float, default=5.0,
+                    help="reject uploads larger than this many MiB (default 5)")
+    sc.add_argument("--no-validate-payload", action="store_true",
+                    help="accept any bytes (skip the reagraph cache-entry shape check)")
+    sc.set_defaults(func=_cmd_serve_cache)
 
     return p
 

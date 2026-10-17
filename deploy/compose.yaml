@@ -1,0 +1,35 @@
+# Docker Compose for the REAgraph shared-cache server on a plain VPS.
+# Reference deployment, not an officially hosted instance.
+#
+# Run from the repo root (the build context is the repo root):
+#   REAGRAPH_CACHE_WRITE_TOKEN=... docker compose -f deploy/compose.yaml up -d
+#
+# Always set a write token for any internet-facing instance. Put TLS in front
+# with a reverse proxy; this service speaks plain HTTP.
+
+services:
+  cache:
+    build:
+      # Build context is the repo root, one level up from this file.
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: reagraph-cache
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      REAGRAPH_CACHE_SERVER_DIR: /data
+      # Auth tokens come from the host environment only.
+      REAGRAPH_CACHE_WRITE_TOKEN: ${REAGRAPH_CACHE_WRITE_TOKEN}
+      REAGRAPH_CACHE_READ_TOKEN: ${REAGRAPH_CACHE_READ_TOKEN:-}
+    volumes:
+      - reagraph-cache:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  reagraph-cache:

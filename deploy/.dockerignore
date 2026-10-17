@@ -1,0 +1,27 @@
+# Build context is the repo root. Keep the image small and the context clean.
+.git
+.gitignore
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build
+dist
+
+# Tests and benchmarks are not needed at runtime.
+tests
+bench
+
+# Local cache / graph artifacts (reagraph.json, *.jag.json, etc.).
+*.json
+
+# Editor / OS cruft.
+.idea
+.vscode
+.DS_Store
+.pytest_cache
+.mypy_cache
+.ruff_cache
