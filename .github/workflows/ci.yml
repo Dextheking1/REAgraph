@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,3 +16,35 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e . pytest
       - run: pytest -q
+
+  package:
+    # Release-gate: the built wheel must install clean (zero deps) in a fresh
+    # environment and the CLI must run -- catches packaging/import/data-file
+    # regressions that an editable `pip install -e .` hides.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build --sdist --wheel
+      - name: Twine metadata check
+        run: twine check dist/*
+      - name: Clean-room install the wheel (no deps) + smoke the CLI
+        run: |
+          python -m venv /tmp/cr
+          /tmp/cr/bin/pip install dist/*.whl
+          /tmp/cr/bin/reagraph --help
+          # core is importable without mcp/graphify/node
+          /tmp/cr/bin/python -c "import reagraph, reagraph.rea_client, reagraph.serve, reagraph.compare"
+          # the packaged skill ships and installs out of the wheel
+          /tmp/cr/bin/reagraph install-skill --dir /tmp/crskills
+          test -s /tmp/crskills/reagraph/SKILL.md
+          # a real offline command path end to end
+          printf '{"nodes":[{"id":"a","label":"m","rea_kind":"module","source_file":"x.js"}],"links":[]}' > /tmp/g.json
+          /tmp/cr/bin/reagraph add /tmp/g.json --graph /tmp/mem.json
+          /tmp/cr/bin/reagraph stats --graph /tmp/mem.json
+          /tmp/cr/bin/reagraph diff /tmp/g.json /tmp/g.json
