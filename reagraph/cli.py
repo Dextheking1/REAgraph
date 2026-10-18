@@ -63,6 +63,25 @@ def _cmd_diff(args) -> int:
     return 0
 
 
+def _cmd_compare(args) -> int:
+    # Authoritative cross-build diff: delegate to REA's own
+    # compare_application_versions (exact matching), vs `diff`'s offline signature
+    # heuristic. Analyzes both builds and compares them in one REA session.
+    from . import compare as comparemod
+    from . import rea_client
+    cmd = shlex.split(args.rea_cmd) if args.rea_cmd else None
+    client = rea_client.ReaClient(server_cmd=cmd)
+    nr = client.compare(args.left, args.right)
+    report = comparemod.to_report(nr)
+    print(comparemod.format_report(report))
+    if args.save:
+        import json
+        with open(args.save, "w", encoding="utf-8") as f:
+            json.dump({"normalized_result": nr, "report": report}, f, indent=1)
+        print(f"saved comparison to {args.save}")
+    return 0
+
+
 def _cmd_stats(args) -> int:
     s = memory.stats(memory.load(args.graph))
     print(f"{args.graph}: {s['nodes']} nodes, {s['edges']} edges")
@@ -179,6 +198,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="node identity for matching: 'signature' (build-stable, for "
                         "two REA builds), 'id' (stable-id graphs), or 'auto' (default)")
     d.set_defaults(func=_cmd_diff)
+
+    cm = sub.add_parser("compare",
+                        help="authoritative cross-build diff via REA's "
+                             "compare_application_versions (analyzes both builds)")
+    cm.add_argument("left", help="left build: an ASAR / extracted JS app for REA to analyze")
+    cm.add_argument("right", help="right build")
+    cm.add_argument("--rea-cmd", default=None,
+                    help="override the REA MCP server command (else $REAGRAPH_REA_CMD)")
+    cm.add_argument("--save", default=None, help="write the full comparison + report JSON here")
+    cm.set_defaults(func=_cmd_compare)
 
     s = sub.add_parser("stats", help="show accumulated-graph coverage")
     s.add_argument("--graph", default=DEFAULT_GRAPH)

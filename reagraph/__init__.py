@@ -6,13 +6,13 @@ The two pieces that work today:
 """
 
 from . import (
-    memory, diff, ingest, summarize, coverage, bridge, serve,
+    memory, diff, compare, ingest, summarize, coverage, bridge, serve,
     rea_adapter, rea_client, artifact, cache, cached,
     fingerprint, align, attest, remote_cache, cache_server, doctor,
 )
 
 __all__ = [
-    "memory", "diff", "ingest", "summarize", "coverage",
+    "memory", "diff", "compare", "ingest", "summarize", "coverage",
     "bridge", "serve", "rea_adapter", "rea_client",
     "artifact", "cache", "cached", "fingerprint", "align", "attest",
     "remote_cache", "cache_server", "doctor",

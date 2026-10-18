@@ -361,6 +361,86 @@ class ReaClient:
                 pass
         return [fragment]
 
+    # -- authoritative comparison (REA's own cross-build comparator) ------
+
+    def compare(self, left_target: str, right_target: str) -> dict:
+        """Authoritative cross-build diff via REA's ``compare_application_versions``.
+
+        Analyzes both targets and compares them in a single REA MCP session, and
+        returns the comparison ``normalized_result`` (map it with
+        ``reagraph.compare.to_report``). This is REA's exact-matching comparison --
+        the authoritative counterpart to ``reagraph.diff``'s offline signature
+        heuristic. Raises a clean RuntimeError if REA is unreachable or an analysis
+        or the comparison errors.
+        """
+        import asyncio
+
+        return asyncio.run(self._compare(left_target, right_target))
+
+    async def _compare(self, left_target: str, right_target: str) -> dict:
+        """Spawn REA over stdio and run the comparison (see ``compare``)."""
+        try:
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+        except ImportError as exc:
+            raise RuntimeError(
+                "reagraph.rea_client needs the 'mcp' package to reach REA. "
+                "Install it (pip install mcp) and point REAGRAPH_REA_CMD at your "
+                "REA MCP server command."
+            ) from exc
+
+        params = StdioServerParameters(
+            command=self.server_cmd[0], args=list(self.server_cmd[1:])
+        )
+        try:
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await self.compare_on_session(
+                        session, left_target, right_target
+                    )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"could not launch REA MCP server {self.server_cmd!r}: {exc}. "
+                "Install node/npx or set REAGRAPH_REA_CMD."
+            ) from exc
+        except _HANDSHAKE_ERRORS as exc:
+            raise RuntimeError(
+                "could not complete the REA MCP handshake for "
+                f"{' '.join(self.server_cmd)}: {_first_cause(exc)}. Override the "
+                "command with REAGRAPH_REA_CMD."
+            ) from exc
+
+    async def compare_on_session(self, session, left_target: str, right_target: str) -> dict:
+        """Analyze both targets and compare them on an already-connected session.
+
+        Connection-INDEPENDENT (unit-testable with a fake session): calls
+        ``analyze_javascript_application`` on each target (``input_path``) and feeds
+        both Evidence envelopes to ``compare_application_versions`` as ``left`` /
+        ``right``. Returns the comparison ``normalized_result``. Surfaces a REA
+        error on either analysis or the comparison as a clean RuntimeError.
+        """
+        analyze = "analyze_javascript_application"
+        ev_left = _result_payload(await session.call_tool(analyze, {"input_path": left_target}))
+        err = _rea_error(ev_left)
+        if err is not None:
+            raise RuntimeError(f"REA analysis of the left build failed: {err}")
+        ev_right = _result_payload(await session.call_tool(analyze, {"input_path": right_target}))
+        err = _rea_error(ev_right)
+        if err is not None:
+            raise RuntimeError(f"REA analysis of the right build failed: {err}")
+        result = _result_payload(
+            await session.call_tool(
+                "compare_application_versions", {"left": ev_left, "right": ev_right}
+            )
+        )
+        err = _rea_error(result)
+        if err is not None:
+            raise RuntimeError(f"REA comparison failed: {err}")
+        if isinstance(result, dict):
+            return result.get("normalized_result", result)
+        return {}
+
     # -- connection (lazy mcp import; the only part that spawns a process) -
 
     async def _connect(self) -> list[dict]:
