@@ -22,10 +22,11 @@ Two generators feed every target function:
                          node, occasional ``edges`` spelling / missing containers.
 
 Harsher, out-of-contract inputs (``None``, non-dict top level, non-dict entries,
-unhashable ids) are driven separately: the two genuinely fail-open functions
-(``compare.to_report``, ``rea_adapter.to_fragment``) must survive ALL of them,
-and the graph-analysis functions that currently raise on them are pinned with
-``xfail`` so the gap is visible and auto-detected if later fixed.
+unhashable ids) are driven separately: the adapter functions
+(``compare.to_report``, ``rea_adapter.to_fragment``) survive ALL of them, and the
+graph-analysis functions are fail-open on a non-dict top level and non-dict
+node/edge entries -- they return the documented empty-ish shape instead of
+raising (see ``test_graph_funcs_fail_open`` and ``test_diff_id_mode_mixed_type_ids``).
 
 Targets: memory (empty_graph/merge/stats/edge_key/load/save), diff
 (diff / rea_signature / normalize_label), summarize, coverage, align, attest,
@@ -324,6 +325,14 @@ def _assert_fragment_shape(out, where):
     assert isinstance(out["nodes"], list) and isinstance(out["links"], list), where
 
 
+def _assert_is_list(out, where):
+    assert isinstance(out, list), where
+
+
+def _assert_is_str(out, where):
+    assert isinstance(out, str), where
+
+
 def _assert_report_shape(out, where):
     assert isinstance(out, dict), where
     assert set(out) >= {"comparison_id", "summary", "items", "matching",
@@ -604,11 +613,10 @@ def test_adapters_are_fully_fail_open(key):
 
 
 # --------------------------------------------------------------------------- #
-# KNOWN robustness gaps: the graph-analysis functions are NOT yet fail-open
-# against out-of-contract inputs (non-dict top level / non-dict entries /
-# unhashable ids). These are pinned as xfail so the gap is visible in the suite
-# and auto-detected (xpass) if a later change makes them fail-open. strict=False
-# keeps the suite green either way. See the test module's final report.
+# FAIL-OPEN graph-analysis functions: these are now fail-open against
+# out-of-contract inputs (non-dict top level / non-dict entries) -- they return
+# the documented empty-ish shape instead of raising. (Previously pinned xfail as
+# a known gap; the gap is fixed, so these are ordinary passing assertions.)
 # --------------------------------------------------------------------------- #
 _GRAPH_FUNCS = {
     "memory.merge": lambda g: memory.merge(g, memory.empty_graph()),
@@ -622,31 +630,40 @@ _GRAPH_FUNCS = {
     "align": lambda g: align.align(g, g),
     "attest": lambda g: attest.attest(g, g),
 }
-# Inputs every listed graph function currently raises on (non-dict top level /
-# non-dict entries). Kept to the universally-raising set so each xfail is a true
-# gap (no misleading xpass); id-specific gaps are characterized separately below.
+# The documented fail-open surface we assert against: non-dict top level (None)
+# and non-dict entries inside nodes/links. id-specific robustness (mixed-type /
+# None ids and edge keys) is characterized separately below.
 _GAP_INPUTS = ["None", "entries_not_dict"]
 
+# Per-function assertion that the returned value has the documented shape, so we
+# prove "does not raise AND returns the documented empty-ish shape", not merely
+# "does not raise".
+_GAP_SHAPE = {
+    "memory.merge": lambda out: _assert_stats_shape(memory.stats(out), "merge->stats"),
+    "memory.stats": lambda out: _assert_stats_shape(out, "stats"),
+    "diff(id)": lambda out: _assert_diff_shape(out, "diff(id)"),
+    "diff(sig)": lambda out: _assert_diff_shape(out, "diff(sig)"),
+    "summarize": lambda out: _assert_summarize_shape(out, "summarize"),
+    "coverage": lambda out: _assert_coverage_shape(out, "coverage"),
+    "frontier": lambda out: _assert_is_list(out, "frontier"),
+    "gaps_report": lambda out: _assert_is_str(out, "gaps_report"),
+    "align": lambda out: _assert_align_shape(out, "align"),
+    "attest": lambda out: _assert_attest_shape(out, "attest"),
+}
+
 _GAP_PARAMS = [
-    pytest.param(
-        fname, iname,
-        marks=pytest.mark.xfail(
-            reason="not fail-open on out-of-contract input (raises); "
-                   "robustness gap surfaced for maintainers",
-            strict=False,
-        ),
-    )
-    for fname in _GRAPH_FUNCS
-    for iname in _GAP_INPUTS
+    (fname, iname) for fname in _GRAPH_FUNCS for iname in _GAP_INPUTS
 ]
 
 
 @pytest.mark.parametrize("fname,iname", _GAP_PARAMS)
-def test_graph_funcs_fail_open_gap(fname, iname):
-    """ASPIRATION: these should be fail-open (return, not raise) on junk input.
-    They currently raise, so this xfails -- documenting the exact gap."""
+def test_graph_funcs_fail_open(fname, iname):
+    """The graph-analysis functions are fail-open on out-of-contract input: a
+    non-dict top level or non-dict node/edge entries return the documented
+    empty-ish shape, never raise."""
     fn = _GRAPH_FUNCS[fname]
-    fn(_HARSH[iname])   # must NOT raise to satisfy the fail-open aspiration
+    out = fn(_HARSH[iname])   # must NOT raise -- fail-open contract
+    _GAP_SHAPE[fname](out)    # ...AND return the documented shape
 
 
 # A well-shaped graph (dict + list-of-dict nodes/links, hashable ids) whose ids
@@ -661,14 +678,12 @@ _MIXED_ID_GRAPH = {
 }
 
 
-@pytest.mark.xfail(
-    reason="diff.diff (id mode) sorts raw node-id / edge-key sets WITHOUT key=str, "
-           "so mixed-type or None ids/relations are not orderable -> TypeError. "
-           "Robustness gap surfaced for maintainers (fix: add key=str to its sorts).",
-    strict=False,
-)
-def test_diff_id_mode_mixed_type_ids_gap():
-    diff.diff(_MIXED_ID_GRAPH, _MIXED_ID_GRAPH)   # should be fail-open; currently raises
+def test_diff_id_mode_mixed_type_ids():
+    """diff.diff (id mode) is fail-open on mixed-type / None ids and edge keys:
+    its node-id and edge-key sorts use key=str, so a graph whose ids/relations are
+    not mutually orderable diffs without raising and returns the documented shape."""
+    out = diff.diff(_MIXED_ID_GRAPH, _MIXED_ID_GRAPH)
+    _assert_diff_shape(out, "diff(id) mixed ids")
 
 
 def test_diff_signature_mode_survives_mixed_type_ids():

@@ -22,6 +22,23 @@ from __future__ import annotations
 from . import memory
 
 
+def _clean_graph(graph) -> dict:
+    """Fail-open coercion to a well-formed graph: a non-dict graph becomes empty,
+    non-list nodes/links become empty, and non-dict entries are dropped. The
+    ``edges`` spelling is folded into ``links``. On a well-formed graph this is a
+    content-preserving copy, so behaviour is unchanged."""
+    if not isinstance(graph, dict):
+        return {"nodes": [], "links": []}
+    nodes = graph.get("nodes", [])
+    links = graph.get("links", [])
+    if not links:
+        links = graph.get("edges", [])
+    return {
+        "nodes": [n for n in nodes if isinstance(n, dict)] if isinstance(nodes, list) else [],
+        "links": [e for e in links if isinstance(e, dict)] if isinstance(links, list) else [],
+    }
+
+
 def _node_labels(graph: dict) -> dict:
     """Map node id -> label (falling back to the id when no label is set)."""
     labels = {}
@@ -117,7 +134,11 @@ def summarize(graph: dict, top: int = 20, max_clusters: int = 10) -> dict:
       - totals + edge confidence breakdown (reuses `memory.stats`),
       - the top god-nodes (<= `top`),
       - the largest clusters (<= `max_clusters`), each with a representative
-        label (the highest-degree member)."""
+        label (the highest-degree member).
+
+    Fail-open: a non-dict graph or non-dict node/edge entries are tolerated (an
+    empty/clean graph yields the natural empty-shape summary); never raises."""
+    graph = _clean_graph(graph)
     base = memory.stats(graph)
     deg = _degrees(graph)
     labels = _node_labels(graph)

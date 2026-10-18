@@ -72,6 +72,24 @@ def rea_signature(node: dict) -> str:
     return f"{kind}|{label}|{source}"
 
 
+def _nodes_list(graph) -> list:
+    """Fail-open: the node list of a graph, or [] for a non-dict graph / non-list
+    nodes. Non-dict node entries are left for callers to skip."""
+    if not isinstance(graph, dict):
+        return []
+    nodes = graph.get("nodes", [])
+    return nodes if isinstance(nodes, list) else []
+
+
+def _links_list(graph) -> list:
+    """Fail-open: the link list of a graph (tolerating the ``edges`` spelling), or
+    [] for a non-dict graph / non-list links."""
+    if not isinstance(graph, dict):
+        return []
+    links = graph.get("links", []) or graph.get("edges", [])
+    return links if isinstance(links, list) else []
+
+
 def _remap_by_signature(graph: dict, signature) -> dict:
     """Return a shallow graph copy whose node ids (and edge endpoints) are replaced
     by ``signature(node)`` plus a stable per-signature ordinal.
@@ -85,8 +103,8 @@ def _remap_by_signature(graph: dict, signature) -> dict:
     """
     counts: dict = {}
     id_map: dict = {}
-    for n in graph.get("nodes", []) or []:
-        if "id" not in n:
+    for n in _nodes_list(graph):
+        if not isinstance(n, dict) or "id" not in n:
             continue
         sig = signature(n)
         idx = counts.get(sig, 0)
@@ -94,15 +112,17 @@ def _remap_by_signature(graph: dict, signature) -> dict:
         id_map[n["id"]] = f"{sig}#{idx}"
 
     nodes = []
-    for n in graph.get("nodes", []) or []:
-        if "id" not in n:
+    for n in _nodes_list(graph):
+        if not isinstance(n, dict) or "id" not in n:
             continue
         m = dict(n)
         m["id"] = id_map[n["id"]]
         nodes.append(m)
 
     links = []
-    for e in graph.get("links", []) or graph.get("edges", []) or []:
+    for e in _links_list(graph):
+        if not isinstance(e, dict):
+            continue
         m = dict(e)
         for key in ("source", "target", "source_node_id", "target_node_id"):
             if key in m and m[key] in id_map:
@@ -113,7 +133,7 @@ def _remap_by_signature(graph: dict, signature) -> dict:
 
 
 def _edge_set(graph: dict) -> set:
-    return {edge_key(e) for e in graph.get("links", []) or graph.get("edges", [])}
+    return {edge_key(e) for e in _links_list(graph) if isinstance(e, dict)}
 
 
 def diff(a: dict, b: dict, *, signature=None) -> dict:
@@ -125,24 +145,27 @@ def diff(a: dict, b: dict, *, signature=None) -> dict:
         a = _remap_by_signature(a, signature)
         b = _remap_by_signature(b, signature)
 
-    a_nodes = {n["id"] for n in a.get("nodes", []) if "id" in n}
-    b_nodes = {n["id"] for n in b.get("nodes", []) if "id" in n}
+    a_nodes = {n["id"] for n in _nodes_list(a) if isinstance(n, dict) and "id" in n}
+    b_nodes = {n["id"] for n in _nodes_list(b) if isinstance(n, dict) and "id" in n}
 
     a_edges = _edge_set(a)
     b_edges = _edge_set(b)
 
-    nodes_added = sorted(b_nodes - a_nodes)
-    nodes_removed = sorted(a_nodes - b_nodes)
+    # Sort with key=str so a graph whose ids are of mixed/non-orderable types, or
+    # whose edge keys contain None (a malformed edge with no relation/endpoint),
+    # never raises a TypeError -- the result stays deterministic by string order.
+    nodes_added = sorted(b_nodes - a_nodes, key=str)
+    nodes_removed = sorted(a_nodes - b_nodes, key=str)
 
-    edges_added = sorted(b_edges - a_edges)
-    edges_removed = sorted(a_edges - b_edges)
+    edges_added = sorted(b_edges - a_edges, key=str)
+    edges_removed = sorted(a_edges - b_edges, key=str)
 
     # A common node is "rewired" if any incident edge appeared or disappeared.
     touched = {ek[0] for ek in edges_added} | {ek[1] for ek in edges_added}
     touched |= {ek[0] for ek in edges_removed} | {ek[1] for ek in edges_removed}
-    rewired = sorted((touched & a_nodes & b_nodes))
+    rewired = sorted((touched & a_nodes & b_nodes), key=str)
 
-    unchanged = sorted((a_nodes & b_nodes) - set(rewired))
+    unchanged = sorted((a_nodes & b_nodes) - set(rewired), key=str)
 
     return {
         "nodes_added": nodes_added,

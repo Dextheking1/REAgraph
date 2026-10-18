@@ -131,6 +131,24 @@ _PROP_CAP = 0.68           # propagation never reaches the structural tier (0.70
 _PROP_MIN_OVERLAP = 1      # must share >=1 matched neighbour to pair at all
 
 
+def _clean_graph(graph) -> dict:
+    """Fail-open coercion to a well-formed graph: a non-dict graph becomes empty,
+    non-list nodes/links become empty, and non-dict entries are dropped. The
+    ``edges`` spelling is folded into ``links``. On a well-formed graph this is a
+    content-preserving copy, so behaviour (and determinism) is unchanged. Done up
+    front so the structural/fingerprint helpers below always see clean input."""
+    if not isinstance(graph, dict):
+        return {"nodes": [], "links": []}
+    nodes = graph.get("nodes", [])
+    links = graph.get("links", [])
+    if not links:
+        links = graph.get("edges", [])
+    return {
+        "nodes": [n for n in nodes if isinstance(n, dict)] if isinstance(nodes, list) else [],
+        "links": [e for e in links if isinstance(e, dict)] if isinstance(links, list) else [],
+    }
+
+
 def _node_ids(graph) -> list:
     return [n["id"] for n in graph.get("nodes", []) if "id" in n]
 
@@ -235,7 +253,12 @@ def align(src, bing, *, min_confidence=0.5, wl_rounds=3) -> dict:
     one-to-one and deterministic. Accurate where symbols survive; on stripped
     binaries structure-only matching is weaker — which is why the confidence is
     always carried, and ambiguity abstains rather than guesses.
+
+    Fail-open: a non-dict graph or non-dict node/edge entries are tolerated (an
+    empty/clean graph yields empty matches); never raises.
     """
+    src = _clean_graph(src)
+    bing = _clean_graph(bing)
     src_nodes = {n["id"]: n for n in src.get("nodes", []) if "id" in n}
     bin_nodes = {n["id"]: n for n in bing.get("nodes", []) if "id" in n}
     src_ids = sorted(src_nodes, key=lambda i: str(i))

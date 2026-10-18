@@ -72,9 +72,26 @@ def _merge_attrs(into: dict, new: dict) -> int:
 
 def merge(base: dict, fragment: dict) -> dict:
     """Fold `fragment` into `base` (returns `base`, mutated). Dedups nodes by id
-    and edges by (source,target,relation); upgrades confidence on re-observation."""
-    nodes = {n["id"]: n for n in base.get("nodes", []) if "id" in n}
-    for n in fragment.get("nodes", []):
+    and edges by (source,target,relation); upgrades confidence on re-observation.
+
+    Fail-open: a non-dict `base`/`fragment` is treated as an empty graph, and
+    non-dict entries inside nodes/links are skipped -- never raises."""
+    if not isinstance(base, dict):
+        base = empty_graph()
+    if not isinstance(fragment, dict):
+        fragment = empty_graph()
+
+    base_nodes = base.get("nodes", [])
+    if not isinstance(base_nodes, list):
+        base_nodes = []
+    nodes = {n["id"]: n for n in base_nodes if isinstance(n, dict) and "id" in n}
+
+    frag_nodes = fragment.get("nodes", [])
+    if not isinstance(frag_nodes, list):
+        frag_nodes = []
+    for n in frag_nodes:
+        if not isinstance(n, dict):
+            continue
         nid = n.get("id")
         if nid is None:
             continue
@@ -83,8 +100,17 @@ def merge(base: dict, fragment: dict) -> dict:
         else:
             nodes[nid] = dict(n)
 
-    edges = {edge_key(e): e for e in base.get("links", [])}
-    for e in fragment.get("links", []) or fragment.get("edges", []):
+    base_links = base.get("links", [])
+    if not isinstance(base_links, list):
+        base_links = []
+    edges = {edge_key(e): e for e in base_links if isinstance(e, dict)}
+
+    frag_links = fragment.get("links", []) or fragment.get("edges", [])
+    if not isinstance(frag_links, list):
+        frag_links = []
+    for e in frag_links:
+        if not isinstance(e, dict):
+            continue
         k = edge_key(e)
         if k in edges:
             _merge_attrs(edges[k], e)
@@ -99,12 +125,22 @@ def merge(base: dict, fragment: dict) -> dict:
 
 
 def stats(graph: dict) -> dict:
+    """Totals and edge-confidence breakdown. Fail-open: a non-dict graph is
+    treated as empty and non-dict edges are skipped -- never raises."""
+    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+    links = graph.get("links", []) if isinstance(graph, dict) else []
+    if not isinstance(nodes, list):
+        nodes = []
+    if not isinstance(links, list):
+        links = []
     conf = {"EXTRACTED": 0, "INFERRED": 0, "other": 0}
-    for e in graph.get("links", []):
+    for e in links:
+        if not isinstance(e, dict):
+            continue
         c = e.get("confidence")
         conf[c if c in conf else "other"] += 1
     return {
-        "nodes": len(graph.get("nodes", [])),
-        "edges": len(graph.get("links", [])),
+        "nodes": len(nodes),
+        "edges": len(links),
         "edge_confidence": conf,
     }

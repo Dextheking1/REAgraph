@@ -55,7 +55,14 @@ CAVEAT = (
 
 
 def _nodes(graph) -> list:
-    return list(graph.get("nodes", []) or [])
+    """Fail-open: the dict node entries of a graph. A non-dict graph / non-list
+    nodes yield []; non-dict node entries are skipped -- never raises."""
+    if not isinstance(graph, dict):
+        return []
+    nodes = graph.get("nodes", []) or []
+    if not isinstance(nodes, list):
+        return []
+    return [n for n in nodes if isinstance(n, dict)]
 
 
 def _edge_triple(e) -> tuple:
@@ -201,7 +208,15 @@ def attest(src, bing, *, align_fn=None, min_confidence=0.5,
     the former optionally subdivides an oversized component by relation signature
     (default ``None`` keeps connected subsystems whole), the latter caps the
     representative labels kept per cluster.
+
+    Fail-open: a non-dict ``src``/``bing`` (or non-dict node/edge entries within)
+    is treated as an empty graph -- align abstains, the residual is empty, and an
+    empty binary scores integrity 1.0; never raises.
     """
+    if not isinstance(src, dict):
+        src = {}
+    if not isinstance(bing, dict):
+        bing = {}
     run = align_fn or _align.align
     result = run(src, bing, min_confidence=min_confidence)
 

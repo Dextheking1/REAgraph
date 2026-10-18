@@ -27,6 +27,23 @@ ABSENCE_DISCLAIMER = (
 )
 
 
+def _clean_graph(graph) -> dict:
+    """Fail-open coercion to a well-formed graph: a non-dict graph becomes empty,
+    non-list nodes/links become empty, and non-dict entries are dropped. The
+    ``edges`` spelling is folded into ``links``. On a well-formed graph this is a
+    content-preserving copy, so behaviour is unchanged."""
+    if not isinstance(graph, dict):
+        return {"nodes": [], "links": []}
+    nodes = graph.get("nodes", [])
+    links = graph.get("links", [])
+    if not links:
+        links = graph.get("edges", [])
+    return {
+        "nodes": [n for n in nodes if isinstance(n, dict)] if isinstance(nodes, list) else [],
+        "links": [e for e in links if isinstance(e, dict)] if isinstance(links, list) else [],
+    }
+
+
 def _node_index(graph: dict) -> dict:
     """Map node id -> node dict, keeping the first entry for a given id."""
     index = {}
@@ -60,7 +77,11 @@ def coverage(graph: dict) -> dict:
     verified_fraction = EXTRACTED edges / total edges (0.0 when there are none).
     `ghost_targets` are ids that appear as an edge source or target but have no
     node entry of their own -- things we point at but never actually analyzed.
+
+    Fail-open: a non-dict graph or non-dict node/edge entries are tolerated (an
+    empty/clean graph yields the natural empty-shape result); never raises.
     """
+    graph = _clean_graph(graph)
     nodes = graph.get("nodes", [])
     edges = _edges(graph)
     index = _node_index(graph)
@@ -97,7 +118,11 @@ def frontier(graph: dict) -> list:
 
     Returns [{source, target, relation, reason}], deterministic (sorted).
     Fully-observed edges and edges into confirmed (EXTRACTED) nodes are excluded.
+
+    Fail-open: a non-dict graph or non-dict node/edge entries are tolerated (an
+    empty/clean graph yields an empty frontier); never raises.
     """
+    graph = _clean_graph(graph)
     index = _node_index(graph)
     items = []
     for e in _edges(graph):
