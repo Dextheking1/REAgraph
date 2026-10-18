@@ -82,6 +82,8 @@ class ReaClient:
         tool_args: Mapping[str, Mapping] | None = None,
         cache=None,
         refresh: bool = False,
+        cli_cmd: Sequence[str] | None = None,
+        cli_timeout: float = 1800.0,
     ) -> None:
         self.target = target
         self.tools = tuple(tools) if tools is not None else DEFAULT_TOOLS
@@ -92,6 +94,16 @@ class ReaClient:
         # the fragment after. refresh=True forces re-analysis past a hit.
         self.cache = cache
         self.refresh = refresh
+        # CLI-JSON transport. REA's MCP stdio response has a size budget that a
+        # large app's full graph overflows ("resource_constraint ... exceeds the
+        # stdio response budget"); REA's CLI emits the complete graph as JSON
+        # instead. When ``cli_cmd`` is set, ``findings()`` runs
+        # ``<cli_cmd> analyze <target> --format json --full-output`` and maps that,
+        # bypassing MCP entirely. ``cli_cmd`` is the REA CLI base (e.g.
+        # ["npx","-y","rea-agents@latest"], or a docker run with
+        # --entrypoint rea-agents) -- distinct from the MCP ``server_cmd``.
+        self.cli_cmd = list(cli_cmd) if cli_cmd else None
+        self.cli_timeout = cli_timeout
 
     # -- construction helpers (no I/O, no process spawn) ------------------
 
@@ -123,6 +135,13 @@ class ReaClient:
 
     def findings(self) -> Iterator[dict]:
         """Yield node-link fragments from a live REA run (bridge.ReaSource)."""
+        # CLI-JSON transport: for large apps that overflow REA's MCP stdio budget,
+        # analyze via the CLI (complete JSON) instead of the MCP server.
+        if self.cli_cmd:
+            for fragment in self.analyze_cli():
+                yield fragment
+            return
+
         # Fast path: a fully-cached pull needs no REA process at all. If every
         # requested tool is already cached we yield those fragments and RETURN
         # WITHOUT spawning REA or even importing ``mcp`` (the spawn + handshake
@@ -270,6 +289,78 @@ class ReaClient:
         tools = getattr(listed, "tools", listed)
         return {getattr(t, "name", t) for t in tools}
 
+    # -- CLI-JSON transport (no mcp; bypasses the stdio response budget) --
+
+    def analyze_cli(self) -> list[dict]:
+        """Analyze the target via REA's CLI JSON output and map it to a fragment.
+
+        Runs ``<cli_cmd> analyze <target> --format json --full-output``, parses the
+        ``{ok, data, meta}`` envelope, and maps ``data`` through the adapter -- the
+        same JavaScript Application Graph the MCP tool returns, but delivered as a
+        complete JSON document rather than over the size-capped MCP stdio channel.
+        Honors the cache (keyed with a ``transport=cli`` scope) and surfaces a REA
+        error envelope without caching it, exactly like the MCP path. Returns a
+        one-element fragment list, or [] on an analysis error.
+        """
+        import subprocess
+
+        tool = "analyze_javascript_application"
+        args = {"transport": "cli"}
+
+        key = None
+        if self.cache is not None and not self.refresh:
+            try:
+                key = self.cache.key_for(self.target, tool, args)
+                hit = self.cache.get(key)
+            except Exception:
+                key, hit = None, None
+            if hit:
+                return [hit["fragment"]]
+
+        cmd = list(self.cli_cmd) + [
+            "analyze", self.target, "--format", "json", "--full-output",
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.cli_timeout,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"could not launch the REA CLI {cmd[0]!r}: {exc}. Set a working "
+                "REA CLI base via cli_cmd / --rea-cli-cmd (e.g. "
+                "'npx -y rea-agents@latest')."
+            ) from exc
+
+        obj = _parse_cli_json(proc.stdout)
+        if obj is None:
+            detail = (proc.stderr or "").strip()[:300]
+            raise RuntimeError(
+                "REA CLI produced no parseable JSON "
+                f"(exit {proc.returncode}){': ' + detail if detail else ''}."
+            )
+
+        payload = obj.get("data", obj) if isinstance(obj, dict) else {}
+        err = _rea_error(payload)
+        if err is None and isinstance(obj, dict):
+            err = _rea_error(obj)
+        if err is not None:
+            print(
+                f"reagraph.rea_client: REA CLI analysis returned an error "
+                f"(not cached): {err}",
+                file=sys.stderr,
+            )
+            return []
+
+        fragment = rea_adapter.to_fragment(tool, payload)
+        if self.cache is not None:
+            try:
+                k = key if key is not None else self.cache.key_for(self.target, tool, args)
+                self.cache.put(k, fragment, meta={"tool": tool, "target": self.target,
+                                                  "transport": "cli"})
+            except Exception:
+                pass
+        return [fragment]
+
     # -- connection (lazy mcp import; the only part that spawns a process) -
 
     async def _connect(self) -> list[dict]:
@@ -368,6 +459,36 @@ def _normalize_tool(name) -> str:
 # so a dashed/underscored/mixed-case server id still resolves to the right path
 # argument name. Built once at import, after ``_normalize_tool`` is defined.
 _TOOL_PATH_ARG_NORM = {_normalize_tool(k): v for k, v in _TOOL_PATH_ARG.items()}
+
+
+def _parse_cli_json(text: str):
+    """Parse REA CLI ``--format json`` stdout into an object, tolerating noise.
+
+    With ``--format json`` REA writes one JSON document to stdout (progress goes to
+    stderr), so the whole text normally parses. As a fallback (in case a progress
+    or banner line leaks onto stdout), scan lines and return the last one that
+    parses as a JSON object carrying an ``ok``/``data`` envelope. Returns the
+    parsed object, or None if nothing parses.
+    """
+    if not text:
+        return None
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    best = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line[0] not in "{[":
+            continue
+        try:
+            obj = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(obj, dict) and ("data" in obj or "ok" in obj):
+            best = obj  # keep the last envelope-shaped object
+    return best
 
 
 def _rea_error(payload) -> str | None:

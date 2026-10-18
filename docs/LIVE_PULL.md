@@ -78,6 +78,28 @@ REACMD="docker run --rm -i -v $PWD/out:/out:ro reagraph-rea:latest"
 reagraph pull /out/app.asar --rea-cmd "$REACMD" --graph app.json --no-cache
 ```
 
+## Large apps: the CLI-JSON transport
+
+REA's MCP stdio response has a size budget. A large application's full graph
+overflows it: the analysis completes but the tool returns
+`resource_constraint ... exceeds the stdio response budget` and `pull` records
+nothing. REA's CLI emits the complete graph as JSON instead, so for large apps use
+the CLI transport:
+
+```bash
+# CLI base = the REA CLI (NOT the --mcp server). For Docker, override the entrypoint:
+CLI="docker run --rm -v $PWD/out:/out:ro --entrypoint rea-agents reagraph-rea:latest"
+reagraph pull /out/big.asar --rea-cli-cmd "$CLI" --graph big.json --no-cache
+```
+
+`reagraph pull --rea-cli-cmd <base>` runs `<base> analyze <target> --format json
+--full-output`, parses the `{ok, data, meta}` envelope, and folds the same graph
+the MCP tool would -- no stdio size cap. Verified on a real 14k-node / 15k-edge
+application (webpack + its dependency tree, ~28 MB ASAR, ~200 MB of analysis JSON);
+the adapter maps it in well under a second and `reagraph diff` recovers an injected
+change from full node-id churn at that scale in ~60 ms. The content-addressed cache
+applies to the CLI transport too (keyed with a `transport=cli` scope).
+
 ## Version diffing is not raw-build diffing
 
 REA's node identities are deliberately *artifact-version scoped*: a node id embeds

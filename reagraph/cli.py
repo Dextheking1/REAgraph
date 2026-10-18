@@ -87,11 +87,15 @@ def _cmd_pull(args) -> int:
     # default a content-addressed cache serves a repeat analysis with no REA call.
     from . import bridge, rea_client
     cmd = shlex.split(args.rea_cmd) if args.rea_cmd else None
+    cli_cmd = shlex.split(args.rea_cli_cmd) if getattr(args, "rea_cli_cmd", None) else None
     cache = None
     if not args.no_cache:
         from . import cache as cachemod
         cache = cachemod.Cache()
-    client = rea_client.ReaClient(target=args.target, server_cmd=cmd, cache=cache, refresh=args.refresh)
+    if cli_cmd:
+        print("(CLI-JSON transport: bypasses REA's MCP stdio size budget for large apps)")
+    client = rea_client.ReaClient(target=args.target, server_cmd=cmd, cache=cache,
+                                  refresh=args.refresh, cli_cmd=cli_cmd)
     s = bridge.ingest_stream(client, args.graph)
     print(f"pulled from REA into {args.graph}: {s['nodes']} nodes, {s['edges']} edges "
           f"(EXTRACTED {s['edge_confidence']['EXTRACTED']} / INFERRED {s['edge_confidence']['INFERRED']})")
@@ -198,6 +202,10 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("target", help="what REA should analyze (e.g. an unpacked app dir or file)")
     pl.add_argument("--rea-cmd", default=None,
                     help="override the REA MCP server command (else $REAGRAPH_REA_CMD, else npx rea-agents)")
+    pl.add_argument("--rea-cli-cmd", default=None,
+                    help="analyze via the REA CLI (JSON) instead of MCP -- for large apps that "
+                         "overflow REA's MCP stdio budget. Value is the REA CLI base, e.g. "
+                         "'npx -y rea-agents@latest'")
     pl.add_argument("--graph", default=DEFAULT_GRAPH)
     pl.add_argument("--no-cache", action="store_true", help="always call REA, do not use the cache")
     pl.add_argument("--refresh", action="store_true", help="re-analyze and overwrite cached results")

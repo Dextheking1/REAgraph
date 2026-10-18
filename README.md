@@ -148,6 +148,13 @@ to minutes), so treat them as orders of magnitude, not guarantees.
   each real mutation (added endpoint / renamed function / removed handler) as
   **exactly its true delta** -- precision/recall/**F1 = 1.00, noise floor 0.00**,
   zero spurious changes, zero data loss.
+- **Scales to a real large app.** Analyzed a real 14,344-node / 14,593-edge
+  application (webpack + its full dependency tree, ~28 MB ASAR) end to end through
+  `reagraph pull`. REA's MCP stdio transport caps the response, so large apps use
+  the CLI-JSON transport (`--rea-cli-cmd`); the adapter maps the 14k-node graph in
+  well under a second, `reagraph summary` renders it as a bounded overview, and the
+  signature diff recovers an injected change from full node-id churn at that scale
+  in ~60 ms.
 - **Alignment abstains instead of mis-matching.** Measured against generated
   ground truth: **precision 1.00** both when symbols survive and when the binary is
   stripped; recall **1.00** with symbols, **0.95** stripped (structure-only). All
