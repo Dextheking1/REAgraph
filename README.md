@@ -96,13 +96,14 @@ local tier on a remote hit). See [docs/CACHE.md](docs/CACHE.md).
 ## Install
 
 ```bash
-pip install reagraph          # or: uv tool install reagraph
-pip install "reagraph[live]"  # adds mcp, for the live pull / serve / compare paths
+uv tool install reagraph              # the reagraph CLI, isolated, on your PATH
+uv tool install "reagraph[live]"      # + mcp, for the live pull / serve / compare paths
 
-reagraph install-skill        # install the /reagraph agent skill into ~/.claude/skills
+reagraph install-skill                # install the /reagraph agent skill into ~/.claude/skills
 ```
 
-Development install from a checkout: `pip install -e ".[live]"`.
+No install needed to try it: `uvx reagraph diff a.json b.json`. Prefer pip? `pip
+install "reagraph[live]"`. Development from a checkout: `uv pip install -e ".[live]"`.
 
 ## Quickstart
 
