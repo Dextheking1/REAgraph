@@ -58,7 +58,10 @@ preflight -> probe with REA -> fold findings into memory -> recall before re-pro
 4. **Map a huge graph.** `reagraph summary` gives a bounded god-node/cluster
    overview so a gigabyte-scale analysis becomes a short read; `reagraph coverage`
    reports what is observed vs only inferred vs unverified (honest gaps).
-5. **Version-diff.** `reagraph diff a.json b.json` — byte-agnostic (see below).
+5. **Version-diff.** `reagraph diff a.json b.json` — byte-agnostic (see below) —
+   or `reagraph compare <left> <right>` for REA's **authoritative** exact-matching
+   comparison (it analyzes both builds and runs REA's own
+   `compare_application_versions`), reporting added/removed/changed/unchanged.
 6. **Attest.** `reagraph attest --source src.json --shipped shipped.json` — does the
    shipped artifact match the source? Reports the shipped-but-unexplained residual
    (the supply-chain signal) and a confidence-weighted integrity score. High-signal
@@ -81,6 +84,11 @@ REA is a Node MCP server. The default command is `npx -y rea-agents@latest --mcp
 REA wants an **ASAR or an extracted JS application** (its
 `analyze_javascript_application` tool takes `input_path`). Pack a source tree with
 `npx @electron/asar pack src app.asar`.
+
+- **Demand-scope a re-analysis.** After a small change, don't re-analyze the whole
+  app: `reagraph pull <target> --source-path src/main.js --source-path src/auth.js`
+  scopes REA to those exact inventory files (repeatable). Scope is part of the cache
+  key, so each scope is its own entry.
 
 ## Byte-agnostic version diff (the headline)
 
@@ -114,8 +122,10 @@ private artifacts never leak. See `docs/CACHE_SERVER.md` and `deploy/`.
 ## Honest scope
 
 - "Unexplained" in `attest` means "could not confidently match", not "malicious".
-- The signature diff is a strong heuristic; for an authoritative cross-build diff
-  REA also has `compare_application_versions`.
+- `reagraph diff` is a fast offline signature heuristic; `reagraph compare` is REA's
+  authoritative exact-matching comparison (needs REA, analyzes both builds). Use
+  `diff` for a quick offline pass on graphs you already have, `compare` when you want
+  REA's own verdict.
 - REAgraph degrades gracefully: with no REA/`mcp` installed, `reagraph add` and the
   diff/summary/coverage/attest commands still work on any node-link graph.
 

@@ -160,6 +160,65 @@ def _by_key(ids, key_of) -> dict:
     return out
 
 
+_STRUCT_HASH_LEN = 16  # hex chars of a structural colour -- short, collision-safe.
+
+
+def _struct_hash(text: str) -> str:
+    """A short, stable, process-independent hash (NOT Python's salted hash())."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:_STRUCT_HASH_LEN]
+
+
+def _struct_labels(graph, rounds) -> dict:
+    """Relation- and direction-aware Weisfeiler-Lehman colours -- the structural
+    signature structure-only matching keys on when every symbol is gone.
+
+    This is deliberately STRONGER than ``fingerprint.wl_labels`` (which folds both
+    edge directions into one undirected multiset and ignores relation types):
+
+      * the initial colour is the directed ``(in_degree, out_degree)`` signature;
+      * each round refines a node's colour from its out-neighbour multiset and its
+        in-neighbour multiset kept SEPARATE, each neighbour tagged with the
+        *relation* of the edge that reaches it.
+
+    So two nodes collide only when their directed, relation-typed neighbourhoods
+    agree out to ``rounds`` hops. Structurally distinct nodes therefore get
+    distinct colours (fewer accidental ties -> fewer abstentions on a stripped
+    binary), while a true source<->binary twin and its match still collide. Pure
+    stdlib, deterministic and order-independent (neighbour multisets are sorted;
+    the result does not depend on node/edge declaration order).
+    """
+    nodes = graph.get("nodes", []) or []
+    ids = [n["id"] for n in nodes if isinstance(n, dict) and "id" in n]
+    idset = set(ids)
+    out_adj: dict = {i: [] for i in ids}  # i -> [(relation, neighbour_id), ...]
+    in_adj: dict = {i: [] for i in ids}
+    indeg: dict = {i: 0 for i in ids}
+    outdeg: dict = {i: 0 for i in ids}
+    for e in graph.get("links", []) or graph.get("edges", []) or []:
+        if not isinstance(e, dict):
+            continue
+        s, t = e.get("source"), e.get("target")
+        rel = e.get("relation", "")
+        if s in idset:
+            outdeg[s] += 1
+            if t in idset:
+                out_adj[s].append((rel, t))
+        if t in idset:
+            indeg[t] += 1
+            if s in idset:
+                in_adj[t].append((rel, s))
+
+    label = {i: _struct_hash("%d|%d" % (indeg[i], outdeg[i])) for i in ids}
+    for _ in range(max(0, int(rounds))):
+        nxt = {}
+        for i in ids:
+            outs = sorted("%s>%s" % (rel, label[j]) for rel, j in out_adj[i])
+            ins = sorted("%s<%s" % (rel, label[j]) for rel, j in in_adj[i])
+            nxt[i] = _struct_hash(repr((label[i], outs, ins)))
+        label = nxt
+    return label
+
+
 def align(src, bing, *, min_confidence=0.5, wl_rounds=3) -> dict:
     """Match nodes of ``src`` (source/graphify graph) to ``bing`` (binary/REA
     graph) for the same program.
@@ -206,8 +265,11 @@ def align(src, bing, *, min_confidence=0.5, wl_rounds=3) -> dict:
             matched_bin.add(bid)
 
     # --- Structural labels (computed once over each whole graph). ---
-    src_wl = fingerprint.wl_labels(src, rounds=wl_rounds)
-    bin_wl = fingerprint.wl_labels(bing, rounds=wl_rounds)
+    # A directed, relation-typed WL colour (see _struct_labels) -- a strictly
+    # stronger signature than fingerprint.wl_labels, so structurally distinct
+    # nodes separate and true twins still collide.
+    src_wl = _struct_labels(src, wl_rounds)
+    bin_wl = _struct_labels(bing, wl_rounds)
 
     # --- 2b. BOTH: a name match whose structure *also* agrees -> boost. ---
     for sid, m in matches.items():
@@ -217,6 +279,15 @@ def align(src, bing, *, min_confidence=0.5, wl_rounds=3) -> dict:
             m["confidence"] = round(min(_BOTH_CAP, m["confidence"] + 0.04), 4)
 
     # --- 2. STRUCTURE match among the still-unmatched nodes. Weaker signal. ---
+    # Acceptance rule (keeps precision ~1.00 even as recall drops): we accept a
+    # structural pair only when the candidate's fingerprint is UNIQUELY best AND
+    # mutually best. With exact WL-colour equality the "best" similarity is an
+    # exact colour collision and the epsilon around a tie collapses to zero, so
+    # "uniquely + mutually best" is exactly: the colour occurs on EXACTLY ONE
+    # unmatched src node and EXACTLY ONE unmatched bin node. Any tie (a colour
+    # shared by >1 node on either side -- a symmetric/ambiguous neighbourhood)
+    # abstains rather than guessing. Because the colour embeds the (in,out) degree
+    # signature, an exact-colour pair also always has matching degree.
     if _STRUCT_CONF >= min_confidence:
         unmatched_src = [i for i in src_ids if i not in matches]
         unmatched_bin = [i for i in bin_ids if i not in matched_bin]
