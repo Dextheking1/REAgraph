@@ -155,3 +155,92 @@ def test_min_confidence_filters_structure_matches():
     r = align(src, bing, min_confidence=0.95)
     assert r["stats"]["matched"] == 0
     assert set(r["src_only"]) == set(sids)
+
+
+# --- STRIPPED-binary structural recovery (GOAL 1) -------------------------------
+
+import reagraph.align as _align_mod
+
+
+def _asymmetric_dag(prefix):
+    """A directed, asymmetric DAG in which every node has a distinct directed,
+    relation-typed neighbourhood -- so the strengthened WL colour pins each node
+    down uniquely and structure-only matching can recover the whole graph. ids
+    are namespaced by ``prefix`` so the two copies share no id and no name."""
+    n = lambda s: prefix + s
+    nodes = [_node(n(x)) for x in ("root", "a", "b", "c", "d", "e", "leaf")]
+    links = [
+        _edge(n("root"), n("a"), "calls"),
+        _edge(n("root"), n("b"), "reads"),
+        _edge(n("a"), n("c"), "calls"),
+        _edge(n("b"), n("c"), "calls"),
+        _edge(n("c"), n("d"), "writes"),
+        _edge(n("d"), n("e"), "calls"),
+        _edge(n("e"), n("leaf"), "calls"),
+        _edge(n("b"), n("leaf"), "reads"),
+    ]
+    return {"directed": True, "nodes": nodes, "links": links}
+
+
+def test_stripped_structural_recovery_precision_one():
+    # Same program, shipped stripped: ids renamed, ALL labels blanked. Only shape
+    # survives. The strengthened structural signature must recover true matches
+    # with precision 1.00 -- every committed match is the correct s<->b twin.
+    src = _asymmetric_dag("s_")
+    bing = _asymmetric_dag("b_")  # isomorphic copy, disjoint id/name space
+    r = align(src, bing)
+
+    matches = r["matches"]
+    # Nothing matched by name (labels blanked, id alphabets disjoint).
+    for m in matches.values():
+        assert m["via"] in ("structure", "propagation")
+    # PRECISION 1.00: every match maps s_<x> to its true twin b_<x>.
+    for sid, m in matches.items():
+        assert sid.startswith("s_")
+        assert m["bin"] == "b_" + sid[2:], (sid, m)
+    # And it actually recovered a non-trivial chunk of the graph structurally.
+    assert len(matches) >= 5
+    _one_to_one(r)
+    _confidences_in_range(r)
+
+
+def _ring(prefix, size=6):
+    ids = [prefix + str(i) for i in range(size)]
+    nodes = [_node(i) for i in ids]
+    links = [_edge(ids[i], ids[(i + 1) % size]) for i in range(size)]
+    return {"directed": True, "nodes": nodes, "links": links}, ids
+
+
+def test_symmetric_ring_abstains_entirely():
+    # A directed ring: every node is structurally identical (in1,out1, same
+    # neighbourhood forever) -> every WL colour collides -> no unique-best exists
+    # anywhere, and with no anchors propagation cannot start. The aligner must
+    # abstain on ALL nodes rather than inventing a rotation.
+    src, sids = _ring("s", 6)
+    bing, _ = _ring("b", 6)
+    r = align(src, bing)
+
+    assert r["matches"] == {}, "a symmetric ring must not be guessed"
+    assert set(r["src_only"]) == set(sids)
+    _one_to_one(r)
+    _confidences_in_range(r)
+
+
+def test_confidence_tiers_are_strictly_ordered():
+    # The invariant the product rests on: exact-name > unique-structural >
+    # propagated, and each tier stays under its cap.
+    assert _align_mod._NAME_CONF > _align_mod._STRUCT_CAP
+    assert _align_mod._STRUCT_CONF >= 0.70 > _align_mod._PROP_CAP
+    assert _align_mod._PROP_CAP >= _align_mod._PROP_CONF
+
+
+def test_stripped_recovery_is_deterministic():
+    src = _asymmetric_dag("s_")
+    bing = _asymmetric_dag("b_")
+    a = align(src, bing)
+    # Re-run with reversed declaration order -> identical mapping.
+    rev = lambda g: {"nodes": list(reversed(g["nodes"])),
+                     "links": list(reversed(g["links"]))}
+    b = align(rev(src), rev(bing))
+    assert a["matches"] == b["matches"]
+    assert a["src_only"] == b["src_only"] and a["bin_only"] == b["bin_only"]

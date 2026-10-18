@@ -155,3 +155,148 @@ def test_format_report_mentions_score_and_stable_caveat():
     # Stable, honest caveat substring -- never over-claims malice.
     assert "not proven-malicious" in report
     assert "could not confidently match" in report
+
+
+# --- Residual clustering (GOAL 2) ----------------------------------------------
+
+
+def test_clean_case_has_no_residual_clusters():
+    src = _graph(["main"], [])
+    bing = _graph(["main"], [])
+    align_fn = _fake_align(
+        matches={"main": {"bin": "main", "confidence": 1.0, "via": "symbol"}},
+        src_only=[], bin_only=[],
+    )
+    r = attest.attest(src, bing, align_fn=align_fn)
+    assert r["residual_clusters"] == []
+
+
+def test_injected_subgraph_is_one_connected_cluster():
+    # A single foreign 4-node subsystem (f0->f1->f2->f3->f0) bridged to a matched
+    # node must land ENTIRELY in the residual and read as ONE cluster of size 4.
+    src = _graph(["main"], [])
+    bing = _graph(
+        ["main", "f0", "f1", "f2", "f3"],
+        [
+            ("main", "f0", "calls"),   # bridge: main matched -> not an internal edge
+            ("f0", "f1", "calls"),
+            ("f1", "f2", "calls"),
+            ("f2", "f3", "sends"),
+            ("f3", "f0", "loops"),
+        ],
+    )
+    align_fn = _fake_align(
+        matches={"main": {"bin": "main", "confidence": 1.0, "via": "symbol"}},
+        src_only=[], bin_only=["f0", "f1", "f2", "f3"],
+    )
+    r = attest.attest(src, bing, align_fn=align_fn)
+
+    clusters = r["residual_clusters"]
+    assert len(clusters) == 1
+    c = clusters[0]
+    assert c["size"] == 4
+    assert set(c["nodes"]) == {"f0", "f1", "f2", "f3"}
+    assert c["internal_edges"] == 4  # the 4 edges among the foreign nodes
+    assert set(c["relations"]) == {"calls", "sends", "loops"}
+    assert c["labels"]  # non-empty representative labels
+
+
+def test_two_separate_subsystems_are_two_clusters():
+    src = _graph(["main"], [])
+    bing = _graph(
+        ["main", "a0", "a1", "a2", "b0", "b1"],
+        [
+            ("main", "a0", "calls"),
+            ("a0", "a1", "calls"), ("a1", "a2", "calls"),  # subsystem A (3 nodes)
+            ("main", "b0", "calls"),
+            ("b0", "b1", "sends"),                          # subsystem B (2 nodes)
+        ],
+    )
+    align_fn = _fake_align(
+        matches={"main": {"bin": "main", "confidence": 1.0, "via": "symbol"}},
+        src_only=[], bin_only=["a0", "a1", "a2", "b0", "b1"],
+    )
+    r = attest.attest(src, bing, align_fn=align_fn)
+
+    clusters = r["residual_clusters"]
+    assert len(clusters) == 2
+    # Largest first.
+    assert [c["size"] for c in clusters] == [3, 2]
+    assert set(clusters[0]["nodes"]) == {"a0", "a1", "a2"}
+    assert set(clusters[1]["nodes"]) == {"b0", "b1"}
+
+
+def test_oversized_component_subdivides_by_relation_signature():
+    # One connected component, but two distinct internal relation roles. With a
+    # small max_cluster_size it splits by relation/neighbourhood instead of
+    # reporting one blob.
+    nodes = ["main"] + ["x%d" % i for i in range(3)] + ["y%d" % i for i in range(3)]
+    edges = [("main", "x0", "calls")]
+    # x-chain via "reads", y-chain via "writes", bridged x0->y0 so it is ONE
+    # connected component.
+    edges += [("x0", "x1", "reads"), ("x1", "x2", "reads")]
+    edges += [("y0", "y1", "writes"), ("y1", "y2", "writes")]
+    edges += [("x0", "y0", "reads")]
+    bing = _graph(nodes, edges)
+    src = _graph(["main"], [])
+    unexplained = ["x0", "x1", "x2", "y0", "y1", "y2"]
+    align_fn = _fake_align(
+        matches={"main": {"bin": "main", "confidence": 1.0, "via": "symbol"}},
+        src_only=[], bin_only=unexplained,
+    )
+
+    whole = attest.attest(src, bing, align_fn=align_fn)
+    assert len(whole["residual_clusters"]) == 1  # default: one connected subsystem
+
+    split = attest.attest(src, bing, align_fn=align_fn, max_cluster_size=4)
+    assert len(split["residual_clusters"]) >= 2  # subdivided by relation signature
+
+
+def test_residual_clusters_are_deterministic():
+    src = _graph(["main"], [])
+    nodes = ["main", "f0", "f1", "f2"]
+    edges = [("main", "f0", "calls"), ("f0", "f1", "calls"), ("f1", "f2", "calls")]
+    align_fn = _fake_align(
+        matches={"main": {"bin": "main", "confidence": 1.0, "via": "symbol"}},
+        src_only=[], bin_only=["f0", "f1", "f2"],
+    )
+    a = attest.attest(_graph(nodes, edges), _graph(nodes, edges), align_fn=align_fn)
+    # reversed declaration order -> identical clustering
+    rev_nodes = list(reversed(nodes))
+    rev_edges = list(reversed(edges))
+    b = attest.attest(_graph(rev_nodes, rev_edges), _graph(rev_nodes, rev_edges),
+                      align_fn=align_fn)
+    assert a["residual_clusters"] == b["residual_clusters"]
+
+
+def test_empty_and_malformed_graphs_do_not_raise():
+    # Fail-safe: empty residual -> no clusters; malformed edges tolerated.
+    empty = attest.attest({"nodes": [], "links": []}, {"nodes": [], "links": []},
+                          align_fn=_fake_align({}, [], []))
+    assert empty["residual_clusters"] == []
+
+    bing = {"nodes": [{"id": "g0"}, {"id": "g1"}, {"not_id": 1}],
+            "links": [{"source": "g0", "target": "g1", "relation": "x"},
+                      "bogus", {"source": "g0"}]}
+    align_fn = _fake_align(matches={}, src_only=[], bin_only=["g0", "g1"])
+    r = attest.attest({"nodes": [], "links": []}, bing, align_fn=align_fn)
+    assert len(r["residual_clusters"]) == 1
+    assert r["residual_clusters"][0]["size"] == 2
+
+
+def test_format_report_lists_clusters_bounded():
+    src = _graph(["main"], [])
+    bing = _graph(
+        ["main", "f0", "f1", "f2"],
+        [("main", "f0", "calls"), ("f0", "f1", "calls"), ("f1", "f2", "calls")],
+    )
+    align_fn = _fake_align(
+        matches={"main": {"bin": "main", "confidence": 1.0, "via": "symbol"}},
+        src_only=[], bin_only=["f0", "f1", "f2"],
+    )
+    r = attest.attest(src, bing, align_fn=align_fn)
+    report = attest.format_report(r)
+    assert "Residual clusters" in report
+    # Bounded output: capping clusters shown is honoured.
+    tiny = attest.format_report(r, max_clusters=0)
+    assert "Residual clusters (grouped unexplained structure): 1" in tiny

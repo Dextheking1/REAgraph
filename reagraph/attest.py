@@ -62,7 +62,121 @@ def _edge_triple(e) -> tuple:
     return (e.get("source"), e.get("target"), e.get("relation", ""))
 
 
-def attest(src, bing, *, align_fn=None, min_confidence=0.5) -> dict:
+def _residual_clusters(bing, unexplained, *, max_cluster_size=None, max_labels=5):
+    """Group the shipped-but-unexplained nodes into reviewable CLUSTERS.
+
+    A flat list of 40 unexplained node ids reads as noise; the same 40 nodes shown
+    as "one connected 40-node subsystem (52 internal edges; sendBeacon, encrypt,
+    ...)" reads as a single finding. So we cluster the subgraph INDUCED by the
+    unexplained nodes (edges whose BOTH endpoints are unexplained, treated
+    undirected) into connected components -- one injected subsystem -> one cluster.
+
+    Optionally, a component larger than ``max_cluster_size`` is further split by
+    each node's internal-relation signature (shared relation/neighbourhood), so a
+    single giant blob still breaks into roles instead of one wall of ids. With the
+    default ``max_cluster_size=None`` no such split happens and a connected
+    subsystem is always reported whole.
+
+    Each cluster records::
+
+        {"size": int,            # number of nodes
+         "nodes": [id, ...],     # the unexplained node ids (sorted)
+         "internal_edges": int,  # edges with both endpoints in this cluster
+         "relations": [rel, ...],# relation types on those internal edges (sorted)
+         "labels": [str, ...]}   # up to ``max_labels`` representative labels,
+                                 # the most internally-connected nodes first
+
+    Fail-safe and deterministic: an empty/malformed graph or empty residual yields
+    ``[]``; everything is sorted before iterating; clusters are returned largest
+    first (ties broken by internal edge count, then first node id).
+    """
+    resid = set(unexplained or [])
+    if not resid:
+        return []
+
+    label_of: dict = {}
+    for n in _nodes(bing):
+        if isinstance(n, dict):
+            nid = n.get("id")
+            if nid in resid:
+                label_of[nid] = n.get("label") or nid
+
+    # Induced undirected adjacency + internal edges, over residual nodes only.
+    adj: dict = {nid: set() for nid in resid}
+    internal_rel: dict = {nid: [] for nid in resid}  # relations incident internally
+    internal_edges = []  # (s, t, rel) with both endpoints unexplained
+    for e in (bing.get("links", []) or bing.get("edges", []) or []):
+        if not isinstance(e, dict):
+            continue
+        s, t, rel = _edge_triple(e)
+        if s in resid and t in resid:
+            internal_edges.append((s, t, rel))
+            internal_rel[s].append(rel)
+            if s != t:
+                internal_rel[t].append(rel)
+                adj[s].add(t)
+                adj[t].add(s)
+
+    # Connected components, deterministic (iterate sorted ids / neighbours).
+    seen: set = set()
+    components = []
+    for start in sorted(resid, key=str):
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        comp = []
+        while stack:
+            cur = stack.pop()
+            comp.append(cur)
+            for nb in sorted(adj[cur], key=str):
+                if nb not in seen:
+                    seen.add(nb)
+                    stack.append(nb)
+        components.append(comp)
+
+    # Optionally subdivide an oversized component by relation signature.
+    groups = []
+    for comp in components:
+        if max_cluster_size is not None and len(comp) > max_cluster_size:
+            by_sig: dict = {}
+            for nid in comp:
+                sig = tuple(sorted(set(internal_rel[nid]))) or ("",)
+                by_sig.setdefault(sig, []).append(nid)
+            for sig in sorted(by_sig, key=lambda s: tuple(str(x) for x in s)):
+                groups.append(by_sig[sig])
+        else:
+            groups.append(comp)
+
+    clusters = []
+    for grp in groups:
+        grpset = set(grp)
+        ie = 0
+        rels: set = set()
+        for (s, t, rel) in internal_edges:
+            if s in grpset and t in grpset:
+                ie += 1
+                rels.add(rel)
+        # Representatives: the most internally-connected nodes first, then by id.
+        deg = {nid: len(adj[nid] & grpset) for nid in grp}
+        reps = sorted(grp, key=lambda i: (-deg[i], str(i)))
+        clusters.append({
+            "size": len(grp),
+            "nodes": sorted(grp, key=str),
+            "internal_edges": ie,
+            "relations": sorted(rels, key=str),
+            "labels": [str(label_of.get(i, i)) for i in reps[: max(0, int(max_labels))]],
+        })
+
+    clusters.sort(
+        key=lambda c: (-c["size"], -c["internal_edges"],
+                       str(c["nodes"][0]) if c["nodes"] else "")
+    )
+    return clusters
+
+
+def attest(src, bing, *, align_fn=None, min_confidence=0.5,
+           max_cluster_size=None, max_cluster_labels=5) -> dict:
     """Align a SOURCE graph against a SHIPPED/BINARY graph and report the residual.
 
     Returns a dict:
@@ -70,12 +184,23 @@ def attest(src, bing, *, align_fn=None, min_confidence=0.5) -> dict:
                            source explains, in [0, 1].
         shipped_unexplained  binary node ids with no confident source match
                              (the supply-chain signal).
+        residual_clusters    the shipped_unexplained nodes grouped into connected
+                             components of the unexplained subgraph (see
+                             _residual_clusters): one injected subsystem -> one
+                             cluster with its size, node ids, internal edge count,
+                             relation types, and representative labels. Empty when
+                             there is no residual.
         unexplained_edges    [[s, t, rel], ...] binary edges between two matched
                              nodes whose relation has no counterpart in source.
         source_only          source node ids that did not ship (dead/tree-shaken).
         matched              number of matched binary nodes.
         bin_nodes            total nodes in the binary graph.
         src_nodes            total nodes in the source graph.
+
+    ``max_cluster_size``/``max_cluster_labels`` are forwarded to the clusterer:
+    the former optionally subdivides an oversized component by relation signature
+    (default ``None`` keeps connected subsystems whole), the latter caps the
+    representative labels kept per cluster.
     """
     run = align_fn or _align.align
     result = run(src, bing, min_confidence=min_confidence)
@@ -117,12 +242,17 @@ def attest(src, bing, *, align_fn=None, min_confidence=0.5) -> dict:
     integrity = max(0.0, min(1.0, integrity))
 
     # Source edges, keyed on (source_id, target_id, relation), for lookup.
-    src_edge_set = {_edge_triple(e) for e in (src.get("links", []) or [])}
+    # Malformed (non-dict) edge entries are tolerated and skipped -- fail-safe.
+    src_edge_set = {
+        _edge_triple(e) for e in (src.get("links", []) or []) if isinstance(e, dict)
+    }
 
     # Unexplained edges: both endpoints matched to source, but the corresponding
     # relation does not exist in source -> a new call/flow the source can't explain.
     unexplained_edges = []
     for e in (bing.get("links", []) or []):
+        if not isinstance(e, dict):
+            continue
         bs, bt, rel = _edge_triple(e)
         ss = bin_to_src.get(bs)
         st = bin_to_src.get(bt)
@@ -131,9 +261,15 @@ def attest(src, bing, *, align_fn=None, min_confidence=0.5) -> dict:
         if (ss, st, rel) not in src_edge_set:
             unexplained_edges.append([bs, bt, rel])
 
+    residual_clusters = _residual_clusters(
+        bing, shipped_unexplained,
+        max_cluster_size=max_cluster_size, max_labels=max_cluster_labels,
+    )
+
     return {
         "integrity": integrity,
         "shipped_unexplained": shipped_unexplained,
+        "residual_clusters": residual_clusters,
         "unexplained_edges": unexplained_edges,
         "source_only": source_only,
         "matched": matched,
@@ -142,12 +278,16 @@ def attest(src, bing, *, align_fn=None, min_confidence=0.5) -> dict:
     }
 
 
-def format_report(result) -> str:
+def format_report(result, *, max_clusters=10, max_cluster_labels=5) -> str:
     """A short, honest report. Leads with the integrity score and the count of
-    shipped-but-unexplained nodes/edges, lists the top unexplained items, and
-    ends with a one-line caveat so we never over-claim malice."""
+    shipped-but-unexplained nodes/edges, surfaces the residual grouped into
+    clusters (so a new subsystem reads as one finding, not N), lists the top
+    unexplained items, and ends with a one-line caveat so we never over-claim
+    malice. Output is bounded: at most ``max_clusters`` clusters and
+    ``max_cluster_labels`` labels per cluster, and 10 items per flat list."""
     integrity = result.get("integrity", 0.0)
     unexplained = result.get("shipped_unexplained", []) or []
+    clusters = result.get("residual_clusters", []) or []
     edges = result.get("unexplained_edges", []) or []
     matched = result.get("matched", 0)
     bin_nodes = result.get("bin_nodes", 0)
@@ -158,6 +298,21 @@ def format_report(result) -> str:
         f"Shipped-but-unexplained: {len(unexplained)} node(s), {len(edges)} edge(s)"
     )
     lines.append(f"Binary nodes matched to source: {matched}/{bin_nodes}")
+
+    if clusters:
+        lines.append("")
+        lines.append(
+            f"Residual clusters (grouped unexplained structure): {len(clusters)}"
+        )
+        for i, c in enumerate(clusters[: max(0, int(max_clusters))], start=1):
+            labs = c.get("labels", [])[: max(0, int(max_cluster_labels))]
+            tail = (" e.g. " + ", ".join(str(x) for x in labs)) if labs else ""
+            lines.append(
+                f"  [{i}] {c.get('size', 0)} node(s), "
+                f"{c.get('internal_edges', 0)} internal edge(s)" + tail
+            )
+        if len(clusters) > max_clusters:
+            lines.append(f"  ... and {len(clusters) - max_clusters} more cluster(s)")
 
     if unexplained:
         lines.append("")
