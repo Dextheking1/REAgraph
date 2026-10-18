@@ -93,11 +93,20 @@ local tier on a remote hit). See [docs/CACHE.md](docs/CACHE.md).
   after each one (crash-safe) and skipping a bad finding instead of aborting the
   run (so one malformed symbol never discards the whole analysis).
 
+## Install
+
+```bash
+pip install reagraph          # or: uv tool install reagraph
+pip install "reagraph[live]"  # adds mcp, for the live pull / serve / compare paths
+
+reagraph install-skill        # install the /reagraph agent skill into ~/.claude/skills
+```
+
+Development install from a checkout: `pip install -e ".[live]"`.
+
 ## Quickstart
 
 ```bash
-pip install -e .
-
 # Fold a REA finding (or any node-link graph) into persistent memory
 reagraph add finding.jag.json            # writes/updates ./reagraph.json
 reagraph add more_findings.jag.json      # merges, dedups, upgrades confidence

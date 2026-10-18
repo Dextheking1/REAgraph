@@ -25,7 +25,7 @@ Run the MCP server and point your agent/CLI at it; the agent then has
 `remember` / `recall` / `diff` / `stats` tools backed by the persistent graph:
 
 ```bash
-pip install "git+https://github.com/Graphify-Labs/REAgraph" mcp
+pip install "reagraph[live]"              # installs reagraph + mcp
 reagraph serve --graph reagraph.json      # MCP stdio server over the memory
 ```
 
