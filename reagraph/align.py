@@ -47,6 +47,8 @@ Signals come from the sibling ``reagraph.fingerprint`` module:
 
 from __future__ import annotations
 
+import hashlib
+
 try:  # the sibling module is built in parallel; tolerate it being absent.
     from . import fingerprint
 except ImportError:  # pragma: no cover - exercised only before fingerprint lands

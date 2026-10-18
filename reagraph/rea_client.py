@@ -84,9 +84,17 @@ class ReaClient:
         refresh: bool = False,
         cli_cmd: Sequence[str] | None = None,
         cli_timeout: float = 1800.0,
+        source_paths: Sequence[str] | None = None,
     ) -> None:
         self.target = target
         self.tools = tuple(tools) if tools is not None else DEFAULT_TOOLS
+        # Demand-scoped analysis: when set, REA's analyze_javascript_application is
+        # told to acquire and analyze ONLY these exact inventoried file paths
+        # (relative to the app root) instead of the whole app -- so re-analyzing a
+        # single changed file after a small edit does not re-pay for the entire
+        # application. Must be exact inventory paths (no globs/aliases). It becomes
+        # part of the cache key, so a scoped analysis is a distinct cache entry.
+        self.source_paths = list(source_paths) if source_paths else None
         self.server_cmd = self._resolve_cmd(server_cmd)
         self.tool_args = {k: dict(v) for k, v in (tool_args or {}).items()}
         # Optional content-addressed cache (reagraph.cache.Cache). When set, a
@@ -129,7 +137,11 @@ class ReaClient:
             return dict(self.tool_args[tool])
         norm = _normalize_tool(tool)
         arg = _TOOL_PATH_ARG_NORM.get(norm, _DEFAULT_PATH_ARG)
-        return {arg: self.target}
+        args = {arg: self.target}
+        # Scope to specific inventory files for the JS analyzer, when requested.
+        if self.source_paths and norm == _ANALYZE_TOOL_NORM:
+            args["source_paths"] = list(self.source_paths)
+        return args
 
     # -- ReaSource interface ---------------------------------------------
 
@@ -305,7 +317,10 @@ class ReaClient:
         import subprocess
 
         tool = "analyze_javascript_application"
+        # Scope is part of the cache key so a demand-scoped run is a distinct entry.
         args = {"transport": "cli"}
+        if self.source_paths:
+            args["source_paths"] = list(self.source_paths)
 
         key = None
         if self.cache is not None and not self.refresh:
@@ -320,6 +335,8 @@ class ReaClient:
         cmd = list(self.cli_cmd) + [
             "analyze", self.target, "--format", "json", "--full-output",
         ]
+        for sp in self.source_paths or []:
+            cmd += ["--source-path", sp]  # REA's CLI flag (repeatable)
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=self.cli_timeout,
@@ -539,6 +556,9 @@ def _normalize_tool(name) -> str:
 # so a dashed/underscored/mixed-case server id still resolves to the right path
 # argument name. Built once at import, after ``_normalize_tool`` is defined.
 _TOOL_PATH_ARG_NORM = {_normalize_tool(k): v for k, v in _TOOL_PATH_ARG.items()}
+
+# The JS analyzer tool (normalized), the only tool that takes ``source_paths``.
+_ANALYZE_TOOL_NORM = _normalize_tool("analyze_javascript_application")
 
 
 def _parse_cli_json(text: str):

@@ -114,7 +114,8 @@ def _cmd_pull(args) -> int:
     if cli_cmd:
         print("(CLI-JSON transport: bypasses REA's MCP stdio size budget for large apps)")
     client = rea_client.ReaClient(target=args.target, server_cmd=cmd, cache=cache,
-                                  refresh=args.refresh, cli_cmd=cli_cmd)
+                                  refresh=args.refresh, cli_cmd=cli_cmd,
+                                  source_paths=getattr(args, "source_path", None) or None)
     s = bridge.ingest_stream(client, args.graph)
     print(f"pulled from REA into {args.graph}: {s['nodes']} nodes, {s['edges']} edges "
           f"(EXTRACTED {s['edge_confidence']['EXTRACTED']} / INFERRED {s['edge_confidence']['INFERRED']})")
@@ -238,6 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--graph", default=DEFAULT_GRAPH)
     pl.add_argument("--no-cache", action="store_true", help="always call REA, do not use the cache")
     pl.add_argument("--refresh", action="store_true", help="re-analyze and overwrite cached results")
+    pl.add_argument("--source-path", action="append", default=None,
+                    help="demand-scope: analyze ONLY this exact inventory file path "
+                         "(relative to the app root); repeat for several. Avoids "
+                         "re-analyzing the whole app after a small change.")
     pl.set_defaults(func=_cmd_pull)
 
     at = sub.add_parser("attest", help="does the shipped artifact match the source? structural source<->binary diff")
