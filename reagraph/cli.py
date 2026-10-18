@@ -174,6 +174,26 @@ def _cmd_serve_cache(args) -> int:
     return 0
 
 
+def _cmd_install_skill(args) -> int:
+    # Drop the packaged agent skill into a skills directory so an agent/CLI picks
+    # it up (the same idea as installing the graphify skill). Works from an
+    # installed wheel or a source checkout via importlib.resources.
+    from pathlib import Path
+    try:
+        from importlib import resources
+        text = resources.files("reagraph").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+    except Exception as exc:
+        print(f"could not locate the packaged reagraph skill: {exc}", file=sys.stderr)
+        return 1
+    dest_dir = Path(args.dir).expanduser() / "reagraph"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "SKILL.md"
+    dest.write_text(text, encoding="utf-8")
+    print(f"installed the reagraph skill -> {dest}")
+    print("trigger it with /reagraph (restart your agent/CLI if it was already open)")
+    return 0
+
+
 def _cmd_query(args) -> int:
     if not shutil.which("graphify"):
         print("graphify is not installed; install it to query the graph:\n"
@@ -274,6 +294,12 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--no-validate-payload", action="store_true",
                     help="accept any bytes (skip the reagraph cache-entry shape check)")
     sc.set_defaults(func=_cmd_serve_cache)
+
+    ik = sub.add_parser("install-skill",
+                        help="install the reagraph agent skill into ~/.claude/skills (or --dir)")
+    ik.add_argument("--dir", default="~/.claude/skills",
+                    help="skills directory (default ~/.claude/skills)")
+    ik.set_defaults(func=_cmd_install_skill)
 
     return p
 

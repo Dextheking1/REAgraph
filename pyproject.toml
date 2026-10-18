@@ -4,25 +4,44 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reagraph"
-version = "0.0.1"
+version = "0.1.0"
 description = "A persistent, queryable knowledge graph for reverse engineering (memory + structural diff for REA-style findings)."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
 keywords = ["reverse-engineering", "knowledge-graph", "mcp", "rea", "graphify", "binary-analysis"]
 authors = [{ name = "Graphify Labs" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+    "Topic :: Software Development :: Quality Assurance",
+]
 # Core is stdlib-only on purpose, so it installs and runs anywhere.
 dependencies = []
 
 [project.optional-dependencies]
+# The live `pull` / `serve` paths speak MCP; install this to reach a REA MCP server.
+live = ["mcp>=1.0"]
 # query/path/explain over the accumulated graph are delegated to graphify.
 graphify = ["graphifyy"]
 
 [project.urls]
+Homepage = "https://github.com/Graphify-Labs/REAgraph"
 Repository = "https://github.com/Graphify-Labs/REAgraph"
+Issues = "https://github.com/Graphify-Labs/REAgraph/issues"
 
 [project.scripts]
 reagraph = "reagraph.cli:main"
 
 [tool.setuptools]
 packages = ["reagraph"]
+
+[tool.setuptools.package-data]
+# Ship the agent skill inside the wheel so `reagraph install-skill` can drop it
+# into ~/.claude/skills without a checkout.
+reagraph = ["skill/SKILL.md"]
