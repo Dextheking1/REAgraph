@@ -115,6 +115,21 @@ is installed (the graph is written in graphify's node-link format):
 graphify query "where is the license checked" --graph reagraph.json
 ```
 
+## Use it as a skill (agents talk to it directly)
+
+A ready-made agent skill ships in [`skills/reagraph/`](skills/reagraph/SKILL.md).
+Drop it into a Claude Code / agent setup (or copy to `~/.claude/skills/reagraph/`)
+and the agent learns the reverse-engineering loop: probe with REA, fold findings
+into memory, recall before re-probing, diff builds by meaning, and attest shipped
+vs source. Pair it with the MCP server so the agent has live `remember` / `recall`
+/ `diff` / `stats` tools over a persistent graph:
+
+```bash
+reagraph serve --graph reagraph.json
+# MCP client: { "mcpServers": { "reagraph": { "command": "reagraph",
+#              "args": ["serve", "--graph", "reagraph.json"] } } }
+```
+
 ## How it fits
 
 ```
