@@ -104,14 +104,34 @@ applies to the CLI transport too (keyed with a `transport=cli` scope).
 
 REA's node identities are deliberately *artifact-version scoped*: a node id embeds
 the build's `artifact_sha256`, and some identity keys embed source line ranges, so
-the same logical module gets a different id in a different build. `reagraph diff`
-keys on identity, so diffing two raw REA builds **overstates** the change (it
-reports unchanged modules as removed+added). Diff is byte-agnostic for
-stable-identity graphs -- a graphify source graph, or the same build re-folded --
-which is the `attest` and dedup path it was built for. For authoritative
-cross-build comparison REA provides its own `compare_application_versions` tool;
-wiring a `reagraph compare` that delegates to it (as `query` delegates to graphify)
-is the honest fix and is tracked in the roadmap.
+the same logical module gets a different id in a different build. An id-keyed diff
+of two builds therefore **overstates** the change (it reports unchanged modules as
+removed+added). `reagraph diff --by signature` (the default when the graphs carry
+`rea_kind`) matches on a build-stable signature -- kind + range-normalized label +
+source file, kind-aware for cross-file entities like IPC channels -- so a
+reformatted/moved build reads as unchanged and only real structural change shows.
+
+On real REA output this is the #4520 fix working: on a 56-node app a raw id-diff
+reports 73-80 node changes per build-pair while the signature diff reports 0 for a
+reformatted-identical build and exactly the true delta otherwise (precision/recall/
+F1 = 1.00, zero spurious). It scales: on a real **14k-node** app (webpack + its
+dependency tree) the raw id-diff reports ~13,500 changes while the signature diff
+cuts that ~30x and introduces zero spurious changes of its own.
+
+### The floor is REA's, not the diff's
+
+The signature diff adds **no** noise floor: on byte-different but
+semantically-identical builds it reports 0 changes. REA's *analysis* does have a
+small floor, though -- analyzing the **same ASAR bytes twice** at 14k-node scale
+yields node counts of 14,321 vs 14,342 and a signature diff of +26 / -5 (73
+rewired), about **0.2% of nodes**. REA's node_ids are stable for identical bytes
+(a raw id-diff of the same bytes is only +23 / -2), so this is REA emitting a
+slightly different node *set* run to run (per-file timeouts / resolution order),
+not id churn. When diffing two genuinely different large builds, expect roughly
+this ~0.2% floor underneath the real signal; the diff reports it faithfully rather
+than hiding it. For authoritative cross-build comparison REA also provides its own
+`compare_application_versions` tool; a `reagraph compare` delegating to it (as
+`query` delegates to graphify) is tracked in the roadmap.
 
 ## Honest status
 
