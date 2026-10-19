@@ -42,6 +42,6 @@ reagraph = "reagraph.cli:main"
 packages = ["reagraph"]
 
 [tool.setuptools.package-data]
-# Ship the agent skill inside the wheel so `reagraph install-skill` can drop it
-# into ~/.claude/skills without a checkout.
-reagraph = ["skill/SKILL.md"]
+# Ship the agent skill (for `reagraph install-skill`) and the two real-REA demo
+# graphs (for `reagraph demo`) inside the wheel, so both work without a checkout.
+reagraph = ["skill/SKILL.md", "demo/*.json"]

@@ -237,6 +237,60 @@ def _cmd_serve_cache(args) -> int:
     return 0
 
 
+def _cmd_demo(args) -> int:
+    # The killer demo, offline: two REAL rea-agents analyses of the same Electron
+    # app one build apart (an exfil endpoint was added). REA keys nodes by a
+    # per-build hash, so a raw id-diff drowns the real change in churn; reagraph
+    # matches by meaning. Graphs ship in the wheel -- no REA/Docker/network.
+    import json
+    from importlib import resources
+
+    try:
+        pkg = resources.files("reagraph").joinpath("demo")
+        a = json.loads(pkg.joinpath("base.json").read_text(encoding="utf-8"))
+        b = json.loads(pkg.joinpath("feat.json").read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"could not load the bundled demo graphs: {exc}", file=sys.stderr)
+        return 1
+
+    n = len([x for x in a.get("nodes", []) if isinstance(x, dict)])
+    raw = diffmod.diff(a, b)  # id mode (what a naive / byte-offset diff sees)
+    sig = diffmod.diff(a, b, signature=diffmod.rea_signature)  # match by meaning
+    rs, ss = raw["summary"], sig["summary"]
+    raw_changed = rs["nodes_added"] + rs["nodes_removed"]
+    real_changed = ss["nodes_added"] + ss["nodes_removed"]
+
+    def _describe(sig_key):  # "kind|label|source#ord" -> readable
+        s = str(sig_key).rsplit("#", 1)[0]
+        parts = s.split("|")
+        kind = parts[0] if parts else "?"
+        label = parts[1] if len(parts) > 1 else ""
+        src = parts[2] if len(parts) > 2 else ""
+        return kind, label, src
+
+    print("reagraph demo — two real REA analyses of the same app, one build apart.")
+    print("(An exfil endpoint was added. REA identifies nodes by a per-build hash,")
+    print(" so a raw id-diff drowns the real change in churn; reagraph matches by meaning.)")
+    print()
+    print(f"  REA raw id-diff :  {raw_changed} of {n} nodes \"changed\"   <- the #4520 problem")
+    print(f"  reagraph diff   :  {real_changed} changed")
+    print()
+    if sig["nodes_added"] or sig["nodes_removed"]:
+        print("  The real delta:")
+        for k in sig["nodes_added"]:
+            kind, label, src = _describe(k)
+            print(f"    + {kind}  \"{label}\"  {src}")
+        for k in sig["nodes_removed"]:
+            kind, label, src = _describe(k)
+            print(f"    - {kind}  \"{label}\"  {src}")
+    print()
+    print("Byte-agnostic version diff, validated on real REA output (F1=1.00, zero")
+    print("spurious). Try it on your own builds:")
+    print("    reagraph diff build-a.json build-b.json      # auto-detects REA graphs")
+    print("    reagraph setup-rea && reagraph pull app.asar # analyze live")
+    return 0
+
+
 def _cmd_install_skill(args) -> int:
     # Drop the packaged agent skill into a skills directory so an agent/CLI picks
     # it up (the same idea as installing the graphify skill). Works from an
@@ -363,6 +417,11 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument("--dir", default="~/.claude/skills",
                     help="skills directory (default ~/.claude/skills)")
     ik.set_defaults(func=_cmd_install_skill)
+
+    dm = sub.add_parser("demo",
+                        help="show the byte-agnostic diff on bundled real-REA graphs "
+                             "(no REA/Docker needed)")
+    dm.set_defaults(func=_cmd_demo)
 
     sr = sub.add_parser("setup-rea",
                         help="build a local REA MCP-server Docker image (pinned) and "

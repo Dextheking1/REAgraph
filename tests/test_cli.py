@@ -414,9 +414,20 @@ def test_build_parser_lists_every_expected_subcommand():
     expected = {
         "add", "diff", "compare", "stats", "summary", "coverage", "query",
         "pull", "attest", "cache", "doctor", "serve", "serve-cache",
-        "install-skill", "setup-rea",
+        "install-skill", "setup-rea", "demo",
     }
     assert choices == expected
+
+
+def test_demo_runs_offline_and_shows_the_contrast(capsys):
+    # The killer demo must work with no REA/Docker/network, from bundled graphs.
+    rc = cli.main(["demo"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "raw id-diff" in out and "reagraph diff" in out
+    assert "of 56 nodes" in out          # raw churn on the real 56-node graph
+    assert "1 changed" in out            # the signature diff finds exactly one
+    assert "endpoint" in out             # the injected exfil endpoint
 
 
 # --------------------------------------------------------------------------- #
