@@ -417,3 +417,55 @@ def test_build_parser_lists_every_expected_subcommand():
         "install-skill",
     }
     assert choices == expected
+
+
+# --------------------------------------------------------------------------- #
+# setup-rea: builds a local REA image via docker; we never actually run docker.
+# --------------------------------------------------------------------------- #
+
+def test_setup_rea_errors_cleanly_without_docker(monkeypatch, capsys):
+    # No docker on PATH -> exit 1 with actionable guidance, no crash.
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    rc = cli.main(["setup-rea"])
+    assert rc == 1
+    assert "docker" in capsys.readouterr().err.lower()
+
+
+def test_setup_rea_errors_when_daemon_down(monkeypatch, capsys):
+    # docker present but daemon down (`docker info` nonzero) -> exit 1, no build.
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/docker")
+    calls = []
+
+    def fake_call(cmd, **kw):
+        calls.append(cmd)
+        return 1 if cmd[:2] == ["docker", "info"] else 0
+
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    rc = cli.main(["setup-rea"])
+    assert rc == 1
+    assert "daemon" in capsys.readouterr().err.lower()
+    # It must not have attempted an image build (no `docker run ... node:24-slim`).
+    assert not any("node:24-slim" in " ".join(map(str, c)) for c in calls)
+
+
+def test_setup_rea_prints_ready_command_when_image_exists(monkeypatch, capsys):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/docker")
+
+    def fake_call(cmd, **kw):
+        if cmd[:2] == ["docker", "info"]:
+            return 0
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            return 0  # image already built
+        return 0
+
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    rc = cli.main(["setup-rea"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "already built" in out
+    assert "REAGRAPH_REA_CMD" in out and cli.REA_IMAGE in out
+
+
+def test_setup_rea_is_registered():
+    p = cli.build_parser()
+    assert "setup-rea" in p._subparsers._group_actions[0].choices

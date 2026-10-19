@@ -26,6 +26,69 @@ from .ingest import load_any
 
 DEFAULT_GRAPH = "reagraph.json"
 
+# Pinned REA version (kept in lockstep with examples/rea-docker/Dockerfile and the
+# Graphify-Labs/rea mirror tag reagraph-pin-6.7.0). `setup-rea` builds this image.
+REA_PIN = "6.7.0"
+REA_IMAGE = f"reagraph-rea:{REA_PIN}"
+
+
+def _cmd_setup_rea(args) -> int:
+    # Build a local REA MCP-server image so a user never has to touch the external
+    # REA repo or hand-assemble a docker command. Uses the pinned rea-agents from
+    # the Graphify-Labs mirror lineage; no REA source is vendored. Pure `docker`
+    # calls (install+commit -- buildx-independent, the verified-reliable path).
+    if not shutil.which("docker"):
+        print("docker not found. Install Docker Desktop or `colima start`, then "
+              "re-run `reagraph setup-rea`.", file=sys.stderr)
+        return 1
+    if subprocess.call(["docker", "info"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL) != 0:
+        print("the Docker daemon is not running. Start Docker Desktop (or "
+              "`colima start`) and re-run `reagraph setup-rea`.", file=sys.stderr)
+        return 1
+
+    built = subprocess.call(["docker", "image", "inspect", REA_IMAGE],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+    if built and not args.rebuild:
+        print(f"{REA_IMAGE} is already built (use --rebuild to rebuild).")
+    else:
+        print(f"building {REA_IMAGE} (installs pinned REA {REA_PIN}; takes a few "
+              "minutes the first time)...")
+        name = "reagraph_rea_build"
+        subprocess.call(["docker", "rm", "-f", name],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        install = (
+            "apt-get update >/dev/null 2>&1 && "
+            "apt-get install -y --no-install-recommends procps >/dev/null 2>&1 && "
+            f"npm install -g rea-agents@{REA_PIN}"
+        )
+        rc = subprocess.call(["docker", "run", "--name", name, "node:24-slim",
+                              "sh", "-c", install])
+        if rc != 0:
+            print("REA install failed inside the container (see output above).",
+                  file=sys.stderr)
+            subprocess.call(["docker", "rm", "-f", name],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return 1
+        subprocess.call(["docker", "commit", "--change",
+                         'ENTRYPOINT ["rea-agents","--mcp"]', name, REA_IMAGE],
+                        stdout=subprocess.DEVNULL)
+        subprocess.call(["docker", "tag", REA_IMAGE, "reagraph-rea:latest"])
+        subprocess.call(["docker", "rm", "-f", name],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"built {REA_IMAGE} (also tagged reagraph-rea:latest).")
+
+    # Emit the ready-to-use command. The artifact dir is mounted at /work, so the
+    # pull target is an in-container /work/<file> path.
+    rea_cmd = f'docker run --rm -i -v "$PWD":/work:ro {REA_IMAGE}'
+    print("\nREA is ready. From the directory holding your app (ASAR or extracted JS):")
+    print(f"  export REAGRAPH_REA_CMD='{rea_cmd}'")
+    print("  reagraph pull /work/app.asar --graph reagraph.json")
+    print("  # large app? add --rea-cli-cmd "
+          f"'docker run --rm -v \"$PWD\":/work:ro --entrypoint rea-agents {REA_IMAGE}'")
+    print("  reagraph doctor   # to re-check prerequisites")
+    return 0
+
 
 def _cmd_add(args) -> int:
     before = memory.stats(memory.load(args.graph))
@@ -300,6 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument("--dir", default="~/.claude/skills",
                     help="skills directory (default ~/.claude/skills)")
     ik.set_defaults(func=_cmd_install_skill)
+
+    sr = sub.add_parser("setup-rea",
+                        help="build a local REA MCP-server Docker image (pinned) and "
+                             "print the ready-to-use --rea-cmd; no REA repo needed")
+    sr.add_argument("--rebuild", action="store_true", help="rebuild even if the image exists")
+    sr.set_defaults(func=_cmd_setup_rea)
 
     return p
 
