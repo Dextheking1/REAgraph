@@ -1,0 +1,82 @@
+# EXAMPLE workflow -- copy this into your own repo and adapt it.
+#
+# It shows the pattern for diffing two builds with REAgraph's byte-agnostic diff
+# and getting a bot comment with the REAL delta on every release.
+#
+# As committed here it runs GREEN on THIS repo as a live example: it diffs two
+# real REA graphs that are checked in under bench/fixtures/. In your own repo you
+# would instead obtain two build graphs -- either pre-exported reagraph/REA JSON
+# files you commit or publish, or produced live in CI with REA (see the
+# commented-out "real pattern" block at the bottom).
+name: release-diff (example)
+
+on:
+  # Real use: diff the just-published build against the previous one.
+  release:
+    types: [published]
+  # Manual run: pass two graph paths (defaults point at the committed fixtures,
+  # so a bare "Run workflow" succeeds out of the box).
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Path to the base build graph JSON"
+        required: true
+        default: "bench/fixtures/diff/real2/graphs/base.json"
+      head:
+        description: "Path to the head build graph JSON"
+        required: true
+        default: "bench/fixtures/diff/real2/graphs/addmod.json"
+
+# Needed so the action can post/update a PR comment when triggered on a PR.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- DEFAULT (live, in-repo) example ------------------------------------
+      # Diff two real REA graphs committed to this repo so the workflow runs
+      # green here with no REA/Docker needed. Point `base`/`head` at your own
+      # exported graphs in your repo.
+      - name: Diff two committed build graphs
+        uses: ./.github/actions/reagraph-diff
+        with:
+          base: ${{ github.event.inputs.base || 'bench/fixtures/diff/real2/graphs/base.json' }}
+          head: ${{ github.event.inputs.head || 'bench/fixtures/diff/real2/graphs/addmod.json' }}
+          by: auto
+          comment: "true"
+          # This repo IS reagraph, so install it from the checkout to stay green
+          # regardless of what is on main / PyPI. In YOUR repo, delete this line
+          # to use the default install (git today; a pinned PyPI version once
+          # reagraph is published, e.g. reagraph-version: "reagraph==0.1.0").
+          reagraph-version: "."
+
+      # --- REAL pattern (pull both builds from REA in CI) ---------------------
+      # Uncomment and adapt when you want CI to analyze two actual builds with
+      # REA instead of diffing pre-exported graphs. This needs Docker (for the
+      # pinned REA image) and your two build artifacts (e.g. two app.asar files).
+      #
+      # - name: Install reagraph (with the live extra) + set up REA
+      #   run: |
+      #     python -m pip install "reagraph[live] @ git+https://github.com/Graphify-Labs/REAgraph@main"
+      #     reagraph setup-rea            # builds a local pinned REA Docker image
+      #
+      # - name: Pull a graph from each build with REA
+      #   env:
+      #     # setup-rea prints this exact command; it mounts $PWD at /work.
+      #     REAGRAPH_REA_CMD: 'docker run --rm -i -v "$PWD":/work:ro reagraph-rea:latest'
+      #   run: |
+      #     reagraph pull /work/build-prev/app.asar --graph base.json --no-cache
+      #     reagraph pull /work/build-new/app.asar  --graph head.json --no-cache
+      #
+      # - name: Diff the two pulled graphs
+      #   uses: ./.github/actions/reagraph-diff   # or Graphify-Labs/REAgraph/.github/actions/reagraph-diff@v1
+      #   with:
+      #     base: base.json
+      #     head: head.json
+      #     by: auto
+      #     comment: "true"

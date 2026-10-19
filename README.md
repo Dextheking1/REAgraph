@@ -1,22 +1,40 @@
 # REAgraph
 
-**A persistent, queryable knowledge graph for reverse engineering.**
+**Tell what actually changed between two builds — not what just moved.**
 
-REAgraph turns one-shot reverse-engineering findings into a durable, structural
-graph of a program — so you (and your AI agent) never reverse the same thing
-twice, and so you can diff two builds by *meaning* instead of by byte offset.
+Rebuild an app and a reverse-engineering engine reports almost *everything*
+changed, because per-build ids churn. REAgraph reports the one thing that actually
+changed:
 
-It is the memory + structure layer that sits alongside a reverse-engineering
-engine. It is designed to complement [REA](https://github.com/morluto/rea)
-(agent-driven reverse engineering, MIT) and
+```
+$ reagraph demo
+  REA raw id-diff :  59 of 56 nodes "changed"   <- the #4520 problem
+  reagraph diff   :  1 changed
+    + endpoint  "network endpoint"  src/main.js
+```
+
+That's two **real** REA analyses one build apart, diffed by *meaning* instead of by
+byte offset — precision/recall/**F1 = 1.00, zero spurious**, validated to 14k
+nodes. Try it with zero setup:
+
+```bash
+uv tool install reagraph && reagraph demo
+```
+
+<!-- Record the GIF with `vhs examples/demo.tape` -> examples/reagraph-demo.gif -->
+
+REAgraph is the persistent-memory + structural-diff layer that sits alongside a
+reverse-engineering engine. It folds one-shot findings into a durable graph (so you
+and your agent never reverse the same thing twice), diffs two builds by structure,
+and attests a shipped artifact against its source. It composes
+[REA](https://github.com/morluto/rea) (agent-driven analysis, MIT) and
 [graphify](https://github.com/Graphify-Labs/graphify) (source → knowledge graph,
-Apache-2.0). It is **not affiliated with or endorsed by the REA project.**
+Apache-2.0), and vendors no code from either — it is **not affiliated with or
+endorsed by the REA project.**
 
-> Status: early. The core pieces below work and are tested. The live REA wiring
-> connects to the real REA MCP server (`npx rea-agents --mcp`), discovers its
-> tools, and calls `analyze_javascript_application` with the correct arguments;
-> a non-empty graph from the real analyzer needs a host meeting REA's own
-> Node/Swift requirements (see `docs/LIVE_PULL.md`). See `docs/DESIGN.md`.
+> Status: early but real. 1300+ tests, works on real REA output, CI on Python
+> 3.9–3.13. Live analysis runs REA as a separate process — `reagraph setup-rea`
+> gets it in one command (see `docs/LIVE_PULL.md`, `docs/DESIGN.md`).
 
 ## Why
 
@@ -205,6 +223,18 @@ See [docs/DESIGN.md](docs/DESIGN.md). The MCP server, live-ingest from REA, and 
 shared analysis cache (client + `reagraph serve-cache` server, keyed by artifact
 hash) are in the tree. Near-term: demand-scoped re-analysis, a hosted community
 cache instance, and harder attestation on stripped native binaries.
+
+## Diff your releases in CI
+
+A reusable GitHub Action runs the byte-agnostic diff on two build graphs and
+surfaces the result — a job summary plus, on pull requests, a bot comment that
+updates in place: **a bot comment on every release: the real change, not the
+thousands of phantom ones.** It works on pre-exported graphs (no REA needed) or
+on graphs pulled live from REA in CI.
+
+- Action: [`.github/actions/reagraph-diff`](.github/actions/reagraph-diff/action.yml)
+- Example consumer workflow: [`.github/workflows/release-diff.yml`](.github/workflows/release-diff.yml)
+- How to use it in your own repo: [docs/GITHUB_ACTION.md](docs/GITHUB_ACTION.md)
 
 ## License
 

@@ -1,0 +1,165 @@
+name: "REAgraph byte-agnostic diff"
+description: >-
+  Diff two build graphs with REAgraph's structural, byte-agnostic diff and
+  surface the real delta -- not the thousands of per-build-id phantom changes.
+  Writes a Markdown summary and (on pull requests) posts/updates a PR comment.
+author: "Graphify Labs"
+branding:
+  icon: git-commit
+  color: green
+
+inputs:
+  base:
+    description: "Path to the base build graph (reagraph / REA node-link JSON)."
+    required: true
+  head:
+    description: "Path to the head build graph (reagraph / REA node-link JSON)."
+    required: true
+  by:
+    description: >-
+      Node-identity regime for matching: 'auto' (detect REA graphs and match by
+      build-stable signature, else by id), 'id', or 'signature'.
+    required: false
+    default: "auto"
+  comment:
+    description: >-
+      When 'true' and the event is a pull_request, post or update a PR comment
+      with the diff. A stable marker makes re-runs update rather than duplicate.
+    required: false
+    default: "true"
+  reagraph-version:
+    description: >-
+      How to install reagraph. Default installs from the public repo (reagraph
+      is not yet on PyPI). Once published, set this to a pinned spec such as
+      'reagraph==0.1.0'.
+    required: false
+    default: "reagraph @ git+https://github.com/Graphify-Labs/REAgraph@main"
+
+outputs:
+  changed:
+    description: "Count of real changes (added + removed + rewired nodes)."
+    value: ${{ steps.diff.outputs.changed }}
+  added:
+    description: "Added node count."
+    value: ${{ steps.diff.outputs.added }}
+  removed:
+    description: "Removed node count."
+    value: ${{ steps.diff.outputs.removed }}
+  rewired:
+    description: "Rewired node count."
+    value: ${{ steps.diff.outputs.rewired }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install reagraph
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        # reagraph is not yet on PyPI, so the default installs from the repo.
+        # Pin to a released version once it is published (see reagraph-version).
+        python -m pip install "${{ inputs.reagraph-version }}"
+        reagraph --help >/dev/null
+
+    - name: Run byte-agnostic diff
+      id: diff
+      shell: bash
+      env:
+        REAGRAPH_BASE: ${{ inputs.base }}
+        REAGRAPH_HEAD: ${{ inputs.head }}
+        REAGRAPH_BY: ${{ inputs.by }}
+      run: |
+        set -euo pipefail
+
+        # Fail early with a clear message if either graph is missing.
+        for var in REAGRAPH_BASE REAGRAPH_HEAD; do
+          path="${!var}"
+          if [ -z "$path" ]; then
+            echo "::error::$var is empty -- pass a path to a reagraph/REA graph JSON file."
+            exit 1
+          fi
+          if [ ! -f "$path" ]; then
+            echo "::error::graph file not found: $path (set the '$( [ "$var" = REAGRAPH_BASE ] && echo base || echo head )' input to a reagraph/REA node-link JSON file)."
+            exit 1
+          fi
+        done
+
+        # Run the exact diff command and capture its full output (banner + report).
+        set +e
+        out="$(reagraph diff "$REAGRAPH_BASE" "$REAGRAPH_HEAD" --by "$REAGRAPH_BY" 2>&1)"
+        rc=$?
+        set -e
+        echo "$out"
+        if [ $rc -ne 0 ]; then
+          echo "::error::reagraph diff exited with status $rc"
+          # Still surface what we captured, then fail.
+          printf '%s\n' "$out" >&2
+          exit $rc
+        fi
+
+        # Parse the counts out of the text report. Lines look like:
+        #   added nodes     : 4
+        #   removed nodes   : 0
+        #   rewired nodes   : 2
+        added="$(printf '%s\n'   "$out" | sed -n 's/^[[:space:]]*added nodes[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'   | head -n1)"
+        removed="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*removed nodes[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+        rewired="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*rewired nodes[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+        added="${added:-0}"; removed="${removed:-0}"; rewired="${rewired:-0}"
+        changed=$(( added + removed + rewired ))
+
+        echo "added=$added"     >> "$GITHUB_OUTPUT"
+        echo "removed=$removed" >> "$GITHUB_OUTPUT"
+        echo "rewired=$rewired" >> "$GITHUB_OUTPUT"
+        echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+        # Build the shared Markdown block (summary + PR comment use the same text).
+        marker="<!-- reagraph-diff -->"
+        {
+          echo "$marker"
+          echo "## REAgraph build diff (byte-agnostic)"
+          echo ""
+          echo '```text'
+          printf '%s\n' "$out"
+          echo '```'
+          echo ""
+          echo "**${changed} real change(s)** (byte-agnostic): ${added} added, ${removed} removed, ${rewired} rewired. The real delta, not the thousands of phantom per-build-id ones."
+        } > "$RUNNER_TEMP/reagraph-diff.md"
+
+        # Step summary.
+        cat "$RUNNER_TEMP/reagraph-diff.md" >> "$GITHUB_STEP_SUMMARY"
+        echo "body_path=$RUNNER_TEMP/reagraph-diff.md" >> "$GITHUB_OUTPUT"
+        echo "marker=$marker" >> "$GITHUB_OUTPUT"
+
+    - name: Post or update PR comment
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- reagraph-diff -->';
+          const body = fs.readFileSync(process.env.REAGRAPH_BODY_PATH, 'utf8');
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+          if (!issue_number) {
+            core.info('No PR number in context; skipping comment.');
+            return;
+          }
+          const existing = await github.paginate(
+            github.rest.issues.listComments,
+            { owner, repo, issue_number, per_page: 100 }
+          );
+          const mine = existing.find(c => c.body && c.body.includes(marker));
+          if (mine) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            core.info(`Updated existing comment ${mine.id}.`);
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            core.info('Created new comment.');
+          }
+      env:
+        REAGRAPH_BODY_PATH: ${{ steps.diff.outputs.body_path }}
