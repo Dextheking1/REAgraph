@@ -7,11 +7,18 @@ fail-open behaviour (a transport that raises never breaks get/put), and that the
 backend is a genuine drop-in for the real reagraph.cache.Cache.
 """
 
+import json
+
 import pytest
 
 from reagraph import cache
 from reagraph.cache import Cache, LocalCacheBackend
-from reagraph.remote_cache import RemoteCacheBackend, TieredBackend, tiered
+from reagraph.remote_cache import (
+    RemoteCacheBackend,
+    TieredBackend,
+    UrllibTransport,
+    tiered,
+)
 
 
 class FakeTransport:
@@ -169,6 +176,89 @@ def test_tiered_prefers_local():
     remote = RemoteCacheBackend("http://shared", transport=FakeTransport({"k": b"remote-loses"}))
     tier = TieredBackend(local, remote)
     assert tier.get("k") == b"local-wins"
+
+
+# -- remote read cap: an oversized body cannot OOM the client -------------
+class FakeHTTPResponse:
+    """Mimics what urlopen returns: a context manager with a chunked ``read``.
+    Records the largest ``amt`` ever requested so a test can prove the transport
+    only ever probes a bounded number of bytes, never the whole body."""
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+        self.max_amt = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, amt=None):
+        if amt is None:  # the unbounded read we are guarding against
+            amt = len(self.data) - self.pos
+        self.max_amt = max(self.max_amt, amt)
+        n = min(amt, len(self.data) - self.pos)
+        chunk = self.data[self.pos:self.pos + n]
+        self.pos += n
+        return chunk
+
+
+def test_get_refuses_oversized_body_and_stays_bounded(monkeypatch):
+    cap = 16
+    # A body far larger than the cap; the transport must not buffer it whole.
+    oversized = FakeHTTPResponse(b"x" * (cap * 50))
+    t = UrllibTransport("http://shared", max_response_bytes=cap)
+    monkeypatch.setattr(t, "_open", lambda req: oversized)
+
+    with pytest.raises(ValueError):
+        t.get("k")  # over the cap -> refused, not returned
+    # Never materialised more than cap+1 bytes (the bounded probe), not the body.
+    assert oversized.max_amt <= cap + 1
+
+
+def test_backend_fails_open_to_miss_on_oversized_body(monkeypatch):
+    cap = 16
+    oversized = FakeHTTPResponse(b"x" * (cap * 50))
+    t = UrllibTransport("http://shared", max_response_bytes=cap)
+    monkeypatch.setattr(t, "_open", lambda req: oversized)
+    backend = RemoteCacheBackend("http://shared", transport=t)
+
+    # The backend's fail-open layer turns the refusal into a plain miss.
+    assert backend.get("k") is None
+    assert oversized.max_amt <= cap + 1
+
+
+def test_normal_size_response_is_unaffected(monkeypatch):
+    body = b"small-payload"
+    resp = FakeHTTPResponse(body)
+    t = UrllibTransport("http://shared", max_response_bytes=64 * 1024)
+    monkeypatch.setattr(t, "_open", lambda req: resp)
+    # A normal-size response round-trips byte-for-byte, exactly as before.
+    assert t.get("k") == body
+
+
+def test_list_is_capped_too(monkeypatch):
+    cap = 8
+    oversized = FakeHTTPResponse(json.dumps(["k"] * 100).encode("utf-8"))
+    t = UrllibTransport("http://shared", max_response_bytes=cap)
+    monkeypatch.setattr(t, "_open", lambda req: oversized)
+    with pytest.raises(ValueError):
+        t.list()
+    assert oversized.max_amt <= cap + 1
+
+
+# -- TieredBackend trust-boundary knob: persist_remote ---------------------
+def test_persist_remote_false_serves_remote_without_warming_local(tmp_path):
+    local = LocalCacheBackend(tmp_path / "cache")
+    remote = RemoteCacheBackend(
+        "http://shared", transport=FakeTransport({"k": b"from-remote"})
+    )
+    tier = TieredBackend(local, remote, persist_remote=False)
+
+    assert tier.get("k") == b"from-remote"   # still served from remote
+    assert local.get("k") is None            # ...but local is never warmed
 
 
 if __name__ == "__main__":

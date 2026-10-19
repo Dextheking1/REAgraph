@@ -59,6 +59,13 @@ from typing import Callable, Iterable, Optional, Union
 # we give up fast and fall through to local rather than stall a build.
 DEFAULT_TIMEOUT = 3.0
 
+# Hard ceiling on how many bytes we will read from a single remote response. A
+# shared cache is an optimisation served by a box we do not fully control; without
+# a cap a malicious or buggy server could stream an unbounded body and OOM the
+# client. 64 MiB is far above any real cache entry; oversize responses are refused
+# (raised) and the backend's fail-open layer turns the refusal into a plain miss.
+DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
 # allow_push may be a plain flag or a per-entry predicate (key, value) -> bool.
 PushGuard = Union[bool, Callable[[str, bytes], bool]]
 
@@ -84,6 +91,11 @@ class UrllibTransport:
     transport deliberately does only the wire work: a 404 on ``get`` is reported as
     a miss (``None``); every other failure is raised and left for the backend's
     fail-open layer to swallow.
+
+    Response bodies are capped at ``max_response_bytes`` (default 64 MiB): a
+    response larger than the cap is refused (raised) rather than fully buffered, so
+    a hostile or buggy server cannot stream an unbounded body and OOM the client.
+    The refusal is caught by the fail-open layer and becomes a plain miss.
     """
 
     def __init__(
@@ -91,10 +103,24 @@ class UrllibTransport:
         base_url: str,
         token: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.timeout = timeout
+        self.max_response_bytes = max_response_bytes
+
+    def _read_capped(self, resp) -> bytes:
+        """Read at most ``max_response_bytes`` from a response. We pull one byte
+        past the cap so we can tell "exactly at the cap" from "over it"; anything
+        over the cap is refused rather than materialised."""
+        cap = self.max_response_bytes
+        data = resp.read(cap + 1)
+        if len(data) > cap:
+            raise ValueError(
+                f"remote response exceeded max_response_bytes ({cap}); refusing"
+            )
+        return data
 
     def _url(self, key: str) -> str:
         return f"{self.base_url}/{urllib.parse.quote(key, safe='')}"
@@ -112,7 +138,7 @@ class UrllibTransport:
         req = urllib.request.Request(self._url(key), headers=self._headers(), method="GET")
         try:
             with self._open(req) as resp:
-                return resp.read()
+                return self._read_capped(resp)
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return None
@@ -137,7 +163,7 @@ class UrllibTransport:
     def list(self) -> Iterable[str]:
         req = urllib.request.Request(f"{self.base_url}/keys", headers=self._headers(), method="GET")
         with self._open(req) as resp:
-            obj = json.loads(resp.read())
+            obj = json.loads(self._read_capped(resp))
         if isinstance(obj, dict):
             obj = obj.get("keys", [])
         return [str(k) for k in obj]
@@ -247,18 +273,31 @@ class TieredBackend:
     posture, so with a default ``RemoteCacheBackend`` nothing is ever pushed.
 
     Everything is fail-open: it only ever composes two fail-open backends.
+
+    TRUST BOUNDARY -- remote values are integrity-checked, NOT authenticated.
+    Warming local from a remote hit means a byte sequence the remote server chose
+    is stored into your local tier and later returned as a cache result. The value
+    is integrity-protected against CORRUPTION in transit/at rest: when it was
+    written through `Cache.put` it carries a ``value_sha256`` that `Cache.get`
+    re-verifies on load, so a value that no longer matches its own recorded digest
+    is rejected. That is a self-hash: it does NOT authenticate the server. A
+    malicious server can still serve a consistent (fragment, value_sha256) pair of
+    its choosing and it will pass. Therefore only point ``remote`` at a shared
+    cache you trust. ``persist_remote=False`` disables local persistence of remote
+    hits if you want to serve from remote without ever caching its bytes locally.
     """
 
-    def __init__(self, local, remote):
+    def __init__(self, local, remote, *, persist_remote: bool = True):
         self.local = local
         self.remote = remote
+        self.persist_remote = persist_remote
 
     def get(self, key: str) -> Optional[bytes]:
         value = self.local.get(key)
         if value is not None:
             return value
         value = self.remote.get(key)
-        if value is not None:
+        if value is not None and self.persist_remote:
             try:
                 self.local.put(key, value)  # warm the local tier on a remote hit
             except Exception as exc:  # fail-open: a failed warm is harmless

@@ -33,19 +33,7 @@ from typing import Iterable
 # Bumped if the on-disk payload shape changes, so stale-shape entries are a miss.
 SCHEMA = "reagraph.cache/1"
 
-try:  # The sibling module is built in parallel and may not be on disk yet.
-    from . import artifact
-except ImportError:  # pragma: no cover - exercised only before artifact.py lands
-    class _ArtifactStub:
-        @staticmethod
-        def artifact_id(path):
-            raise RuntimeError(
-                "reagraph.artifact is not available: cannot hash "
-                f"{path!r}. Pass an explicit key to the cache, or install the "
-                "reagraph.artifact module."
-            )
-
-    artifact = _ArtifactStub()  # type: ignore[assignment]
+from . import artifact
 
 
 def _log(msg: str) -> None:
@@ -56,6 +44,12 @@ def _log(msg: str) -> None:
 def _canonical_json(obj) -> str:
     """Stable JSON so equal args always hash the same, regardless of dict order."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _value_sha256(fragment) -> str:
+    """sha256 hex of the canonical JSON of a fragment -- the stored value's own
+    digest, recorded on `put` and re-checked on `get`."""
+    return hashlib.sha256(_canonical_json(fragment).encode("utf-8")).hexdigest()
 
 
 class CacheBackend:
@@ -184,7 +178,19 @@ class Cache:
     def get(self, key: str) -> dict | None:
         """Return the stored {"fragment", "meta"} payload, or None on miss.
 
-        Never raises: a missing OR corrupt entry is just a miss (logged)."""
+        Never raises: a missing OR corrupt entry is just a miss (logged).
+
+        Value integrity: if the stored meta carries a ``value_sha256`` (written by
+        `put`), the fragment is re-hashed on load and compared against it; a
+        mismatch -- corruption, truncation, or tampering of the stored value
+        against its OWN recorded digest -- is treated as a corrupt miss (None).
+        Older entries written before this check existed carry no ``value_sha256``
+        and still load (back-compat). This is a SELF-hash, so it detects a value
+        that no longer matches the digest stored next to it; it does NOT
+        authenticate the writer -- a malicious or buggy server that stores a
+        consistent (fragment, value_sha256) pair passes this check. The shared
+        tier therefore remains a trust boundary (see remote_cache.TieredBackend).
+        """
         raw = self.backend.get(key)
         if raw is None:
             return None
@@ -196,13 +202,31 @@ class Cache:
         if not isinstance(payload, dict) or "fragment" not in payload:
             _log(f"entry {key} has an unexpected shape; ignoring")
             return None
+        meta = payload.get("meta")
+        if isinstance(meta, dict):
+            recorded = meta.get("value_sha256")
+            if recorded is not None:
+                actual = _value_sha256(payload["fragment"])
+                if actual != recorded:
+                    _log(
+                        f"value integrity mismatch for {key} "
+                        f"(recorded {recorded}, got {actual}); treating as corrupt"
+                    )
+                    return None
         return payload
 
     def put(self, key: str, fragment: dict, meta: dict | None = None) -> None:
-        """Store a fragment plus its meta, stamping created_at + a schema tag."""
+        """Store a fragment plus its meta, stamping created_at + a schema tag.
+
+        A ``value_sha256`` digest of the canonical JSON of the fragment is recorded
+        in meta so `get` can detect later corruption/truncation/tampering of the
+        stored value against its own digest. See `get` for the (deliberate) limit:
+        it is a self-hash, not writer authentication.
+        """
         full_meta = dict(meta or {})
         full_meta.setdefault("created_at", time.time())
         full_meta["schema"] = SCHEMA
+        full_meta["value_sha256"] = _value_sha256(fragment)
         payload = {"fragment": fragment, "meta": full_meta}
         self.backend.put(key, _canonical_json(payload).encode("utf-8"))
 

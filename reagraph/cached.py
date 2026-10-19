@@ -16,14 +16,6 @@ from __future__ import annotations
 
 import sys
 
-try:
-    from . import cache as _cache  # noqa: F401  (imported for availability/parity)
-except ImportError:  # pragma: no cover - tiny stub so this module imports standalone
-    class _cache:  # type: ignore
-        """Placeholder so importing `reagraph.cached` never fails before the
-        sibling `reagraph.cache` lands. Callers always pass a real (or fake)
-        cache object into `cache_analysis`, so this stub is never exercised."""
-
 
 def cache_analysis(
     cache,

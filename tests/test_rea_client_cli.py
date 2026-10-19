@@ -12,6 +12,8 @@ import json
 import sys
 import textwrap
 
+import pytest
+
 from reagraph import cache as cachemod
 from reagraph import rea_client
 
@@ -125,4 +127,52 @@ def test_cli_builds_the_expected_command(tmp_path, monkeypatch):
     client = rea_client.ReaClient(target="/app.asar", cli_cmd=["rea-agents"])
     list(client.findings())
     assert recorded["cmd"] == ["rea-agents", "analyze", "/app.asar",
+                               "--format", "json", "--full-output"]
+
+
+def test_cli_transport_streams_and_caps_oversized_stdout(tmp_path):
+    # A fake CLI printing far more than the cap must raise a clean RuntimeError
+    # naming the limit -- the stdout was streamed to a temp file, so the oversize
+    # is caught by the byte cap BEFORE anything is loaded into memory (no OOM).
+    big = "x" * 5000  # not even JSON: the cap trips before any parse is attempted
+    cli = _write_fake_cli(tmp_path, big)
+    client = rea_client.ReaClient(target="/app.asar", cli_cmd=cli, cli_max_bytes=100)
+    with pytest.raises(RuntimeError) as excinfo:
+        list(client.findings())
+    msg = str(excinfo.value)
+    assert "cli_max_bytes" in msg and "100" in msg
+
+
+def test_cli_transport_maps_full_graph_via_streamed_temp_file(tmp_path):
+    # Same as the basic mapping test, but asserts the real streamed-temp-file
+    # path (a real subprocess whose stdout is streamed to disk, then parsed back)
+    # yields the identical fragment -- normal-output behavior is unchanged.
+    cli = _write_fake_cli(tmp_path, json.dumps(_jag_envelope()))
+    client = rea_client.ReaClient(target="/app.asar", cli_cmd=cli,
+                                  cli_max_bytes=10 * 1024 * 1024)
+    frags = list(client.findings())
+    assert len(frags) == 1 and len(frags[0]["nodes"]) == 2
+    assert len(frags[0]["links"]) == 1
+
+
+def test_cli_normalizes_dash_leading_target_argv(monkeypatch):
+    # Argument-injection guard: a target beginning with '-' would be read as a
+    # REA flag, so it is normalized to an explicit relative path ('./-weird.asar')
+    # and still passed as the positional analyze path (options unchanged).
+    recorded = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = json.dumps(_jag_envelope())
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        recorded["cmd"] = cmd
+        return _Proc()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = rea_client.ReaClient(target="-weird.asar", cli_cmd=["rea-agents"])
+    list(client.findings())
+    assert recorded["cmd"] == ["rea-agents", "analyze", "./-weird.asar",
                                "--format", "json", "--full-output"]

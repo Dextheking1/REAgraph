@@ -28,23 +28,11 @@ import shlex
 import sys
 from typing import Iterator, Mapping, Sequence
 
-# The adapter is a sibling module (built in parallel). Import it per the shared
-# contract; stay importable and independently testable even if it is not present
-# yet — tests stub ``to_fragment`` and real runs will have it installed.
-try:
-    from . import rea_adapter
-except ImportError:  # pragma: no cover - exercised only before the sibling lands
-    import types
-
-    rea_adapter = types.ModuleType("reagraph.rea_adapter")
-
-    def _to_fragment_missing(tool_name: str, result: dict) -> dict:
-        raise RuntimeError(
-            "reagraph.rea_adapter is not available; cannot convert REA results"
-        )
-
-    rea_adapter.to_fragment = _to_fragment_missing  # type: ignore[attr-defined]
-    rea_adapter.SUPPORTED_TOOLS = set()  # type: ignore[attr-defined]
+# The adapter is a sibling module that ships in the same wheel, so it is always
+# importable here. (``collect`` and ``_cached_only`` already tolerate an empty
+# ``SUPPORTED_TOOLS`` and a ``to_fragment`` that raises, so a half-built adapter
+# degrades gracefully without needing an import-time stub.)
+from . import rea_adapter
 
 
 # npx-based default: run REA straight from npm with no local checkout. The
@@ -84,6 +72,7 @@ class ReaClient:
         refresh: bool = False,
         cli_cmd: Sequence[str] | None = None,
         cli_timeout: float = 1800.0,
+        cli_max_bytes: int = 1024 * 1024 * 1024,
         source_paths: Sequence[str] | None = None,
     ) -> None:
         self.target = target
@@ -112,6 +101,11 @@ class ReaClient:
         # --entrypoint rea-agents) -- distinct from the MCP ``server_cmd``.
         self.cli_cmd = list(cli_cmd) if cli_cmd else None
         self.cli_timeout = cli_timeout
+        # Hard cap on REA CLI stdout. The CLI JSON for a large app is hundreds of
+        # MB; ``analyze_cli`` streams it to a temp file (not RAM) and refuses to
+        # load more than this many bytes into memory to parse, so a runaway or
+        # pathologically large document raises a clean error instead of OOMing.
+        self.cli_max_bytes = int(cli_max_bytes)
 
     # -- construction helpers (no I/O, no process spawn) ------------------
 
@@ -303,6 +297,16 @@ class ReaClient:
 
     # -- CLI-JSON transport (no mcp; bypasses the stdio response budget) --
 
+    def _enforce_cli_cap(self, nbytes: int) -> None:
+        """Raise a clean RuntimeError if the CLI stdout exceeds ``cli_max_bytes``."""
+        if nbytes > self.cli_max_bytes:
+            raise RuntimeError(
+                f"REA CLI stdout is {nbytes} bytes, over the cli_max_bytes cap of "
+                f"{self.cli_max_bytes}; refusing to buffer the whole document in "
+                "memory. Raise cli_max_bytes if this output is legitimately that "
+                "large."
+            )
+
     def analyze_cli(self) -> list[dict]:
         """Analyze the target via REA's CLI JSON output and map it to a fragment.
 
@@ -315,6 +319,7 @@ class ReaClient:
         one-element fragment list, or [] on an analysis error.
         """
         import subprocess
+        import tempfile
 
         tool = "analyze_javascript_application"
         # Scope is part of the cache key so a demand-scoped run is a distinct entry.
@@ -332,28 +337,100 @@ class ReaClient:
             if hit:
                 return [hit["fragment"]]
 
+        # Argument-injection guard. REA's CLI is ``analyze <path> [options]`` with
+        # the options AFTER the path. A target beginning with '-' would be read as
+        # a REA flag rather than the positional path. A ``--`` separator before the
+        # path is NOT viable here: under a standard arg parser everything after
+        # ``--`` is positional, so ``analyze -- <path> --format json --full-output``
+        # would also swallow the trailing options as positionals and break the
+        # command. Normalize instead -- prefix a dashed target with ``./`` so it is
+        # an unambiguous relative path ("./-weird.asar"). Absolute paths ('/...')
+        # and ordinary relative paths are untouched. The cache key still uses the
+        # original self.target, so identity is unchanged.
+        safe_target = self.target
+        if safe_target.startswith("-"):
+            safe_target = os.path.join(".", safe_target)
+
         cmd = list(self.cli_cmd) + [
-            "analyze", self.target, "--format", "json", "--full-output",
+            "analyze", safe_target, "--format", "json", "--full-output",
         ]
         for sp in self.source_paths or []:
             cmd += ["--source-path", sp]  # REA's CLI flag (repeatable)
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.cli_timeout,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                f"could not launch the REA CLI {cmd[0]!r}: {exc}. Set a working "
-                "REA CLI base via cli_cmd / --rea-cli-cmd (e.g. "
-                "'npx -y rea-agents@latest')."
-            ) from exc
 
-        obj = _parse_cli_json(proc.stdout)
+        # Stream the CLI's (potentially hundreds-of-MB) JSON stdout straight to a
+        # temp file instead of buffering it in RAM: ``stdout`` is a binary file
+        # object, so the OS writes the child's output to disk directly and no
+        # ``text=`` second decoded copy is ever made. We then enforce a hard
+        # ``cli_max_bytes`` cap BEFORE reading the file back for parsing, so an
+        # over-large document raises a clean error instead of exhausting memory.
+        # stderr stays captured (bounded) for error messages. The temp file is
+        # always removed in the finally.
+        tmp = tempfile.NamedTemporaryFile(
+            mode="wb", prefix="reagraph-rea-cli-", suffix=".json", delete=False
+        )
+        tmp_path = tmp.name
+        try:
+            try:
+                result = subprocess.run(
+                    cmd, stdout=tmp, stderr=subprocess.PIPE,
+                    timeout=self.cli_timeout,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"could not launch the REA CLI {cmd[0]!r}: {exc}. Set a "
+                    "working REA CLI base via cli_cmd / --rea-cli-cmd (e.g. "
+                    "'npx -y rea-agents@latest')."
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"REA CLI {cmd[0]!r} did not finish within "
+                    f"cli_timeout={self.cli_timeout}s."
+                ) from exc
+            finally:
+                try:
+                    tmp.flush()
+                finally:
+                    tmp.close()
+
+            # stderr is bytes on a real run (we did not pass text=); a test fake
+            # may hand back a str. Decode and bound either way.
+            raw_err = getattr(result, "stderr", b"") or b""
+            if isinstance(raw_err, bytes):
+                stderr_text = raw_err.decode("utf-8", "replace")
+            else:
+                stderr_text = str(raw_err)
+            stderr_text = stderr_text[:8192]
+            returncode = getattr(result, "returncode", 0)
+
+            # stdout: a real run streamed it to the temp file (result.stdout is
+            # None); a test fake monkeypatching subprocess.run returns it on the
+            # result object as a str/bytes. Honor both, and cap either way so we
+            # never load more than cli_max_bytes into memory.
+            faked_stdout = getattr(result, "stdout", None)
+            if isinstance(faked_stdout, (str, bytes)):
+                faked_bytes = (
+                    faked_stdout.encode("utf-8", "replace")
+                    if isinstance(faked_stdout, str) else faked_stdout
+                )
+                self._enforce_cli_cap(len(faked_bytes))
+                stdout_text = faked_bytes.decode("utf-8", "replace")
+            else:
+                size = os.path.getsize(tmp_path)
+                self._enforce_cli_cap(size)
+                with open(tmp_path, "r", encoding="utf-8", errors="replace") as fh:
+                    stdout_text = fh.read()
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+        obj = _parse_cli_json(stdout_text)
         if obj is None:
-            detail = (proc.stderr or "").strip()[:300]
+            detail = (stderr_text or "").strip()[:300]
             raise RuntimeError(
                 "REA CLI produced no parseable JSON "
-                f"(exit {proc.returncode}){': ' + detail if detail else ''}."
+                f"(exit {returncode}){': ' + detail if detail else ''}."
             )
 
         payload = obj.get("data", obj) if isinstance(obj, dict) else {}
