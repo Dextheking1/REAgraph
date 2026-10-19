@@ -39,79 +39,18 @@ Everything here is pure stdlib and deterministic (candidates are considered in
 sorted-id order, so the same inputs always produce the same mapping).
 
 Signals come from the sibling ``reagraph.fingerprint`` module:
-    wl_labels(graph, rounds=3) -> {id: label}   structural neighbourhood hash
     degrees(graph)             -> {id: int}      total degree per node
     name_key(node)             -> str | None     stable symbol/name of a node
     god_nodes(graph, top)      -> [id, ...]       the most-connected hubs
+The structural signature is this module's own ``_struct_labels`` (a directed,
+relation-typed Weisfeiler-Lehman colour), not taken from fingerprint.
 """
 
 from __future__ import annotations
 
 import hashlib
 
-try:  # the sibling module is built in parallel; tolerate it being absent.
-    from . import fingerprint
-except ImportError:  # pragma: no cover - exercised only before fingerprint lands
-    import hashlib as _hashlib
-
-    class _FingerprintStub:
-        """A small, dependency-free stand-in with the documented signatures, so
-        this module imports and runs before the real ``fingerprint`` exists."""
-
-        @staticmethod
-        def name_key(node):
-            raw = node.get("label") or node.get("id") if isinstance(node, dict) else node
-            if raw is None:
-                return None
-            text = str(raw)
-            cut = text.find("(")
-            if cut != -1:
-                text = text[:cut]
-            bad = "()[]{}<>.,:;*&!?\"'`~@#$%^+=|\\/ \t\n"
-            key = text.lower().translate({ord(c): None for c in bad})
-            return key or None
-
-        @staticmethod
-        def degrees(graph):
-            deg = {n["id"]: 0 for n in graph.get("nodes", []) if "id" in n}
-            for e in graph.get("links", []):
-                s, t = e.get("source"), e.get("target")
-                if s in deg:
-                    deg[s] += 1
-                if t in deg:
-                    deg[t] += 1
-            return deg
-
-        @staticmethod
-        def wl_labels(graph, rounds=3):
-            ids = [n["id"] for n in graph.get("nodes", []) if "id" in n]
-            out = {i: [] for i in ids}
-            inc = {i: [] for i in ids}
-            for e in graph.get("links", []):
-                s, t = e.get("source"), e.get("target")
-                rel = e.get("relation", "")
-                if s in out and t in inc:
-                    out[s].append((rel, t))
-                    inc[t].append((rel, s))
-            # Name-agnostic initial label: the (out-degree, in-degree) signature.
-            label = {i: "%d:%d" % (len(out[i]), len(inc[i])) for i in ids}
-            for _ in range(max(0, int(rounds))):
-                nxt = {}
-                for i in ids:
-                    outs = sorted("%s>%s" % (r, label[j]) for r, j in out[i])
-                    ins = sorted("%s<%s" % (r, label[j]) for r, j in inc[i])
-                    sig = repr((label[i], outs, ins)).encode("utf-8")
-                    nxt[i] = _hashlib.sha1(sig).hexdigest()[:16]
-                label = nxt
-            return label
-
-        @staticmethod
-        def god_nodes(graph, top):
-            deg = _FingerprintStub.degrees(graph)
-            ranked = sorted(deg.items(), key=lambda kv: (-kv[1], str(kv[0])))
-            return [i for i, _ in ranked[: max(0, int(top))]]
-
-    fingerprint = _FingerprintStub()
+from . import fingerprint
 
 
 # Confidence model (all in [0, 1]). Name is the strong signal, structure weaker.
@@ -190,8 +129,8 @@ def _struct_labels(graph, rounds) -> dict:
     """Relation- and direction-aware Weisfeiler-Lehman colours -- the structural
     signature structure-only matching keys on when every symbol is gone.
 
-    This is deliberately STRONGER than ``fingerprint.wl_labels`` (which folds both
-    edge directions into one undirected multiset and ignores relation types):
+    This is deliberately stronger than a plain undirected WL (which would fold
+    both edge directions into one multiset and ignore relation types):
 
       * the initial colour is the directed ``(in_degree, out_degree)`` signature;
       * each round refines a node's colour from its out-neighbour multiset and its
@@ -288,9 +227,9 @@ def align(src, bing, *, min_confidence=0.5, wl_rounds=3) -> dict:
             matched_bin.add(bid)
 
     # --- Structural labels (computed once over each whole graph). ---
-    # A directed, relation-typed WL colour (see _struct_labels) -- a strictly
-    # stronger signature than fingerprint.wl_labels, so structurally distinct
-    # nodes separate and true twins still collide.
+    # A directed, relation-typed WL colour (see _struct_labels) -- a strong
+    # structural signature, so structurally distinct nodes separate and true
+    # twins still collide.
     src_wl = _struct_labels(src, wl_rounds)
     bin_wl = _struct_labels(bing, wl_rounds)
 

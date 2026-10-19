@@ -5,6 +5,8 @@ graph memory wired behind the MCP tools is verified without importing `mcp`.
 """
 
 import json
+import sys
+import types
 
 from reagraph import serve
 
@@ -107,6 +109,94 @@ def test_recall_fallback_empty_graph(tmp_path, monkeypatch):
     monkeypatch.setattr(serve.shutil, "which", lambda _name: None)
     out = serve._recall(gp, "anything")
     assert "empty graph" in out
+
+
+def test_recall_graphify_success_branch(tmp_path, monkeypatch):
+    # The graphify-SUCCESS path: graphify is on PATH and returns output with a
+    # zero exit code, so its stdout is returned verbatim (no fallback).
+    gp = str(tmp_path / "reagraph.json")
+    serve._remember(gp, JAG_PASS2)
+    monkeypatch.setattr(serve.shutil, "which", lambda _name: "/usr/bin/graphify")
+
+    class _Proc:
+        returncode = 0
+        stdout = "GRAPHIFY SLICE: check -> net\n"
+        stderr = ""
+
+    calls = {}
+
+    def _fake_run(cmd, **kwargs):
+        calls["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(serve.subprocess, "run", _fake_run)
+    out = serve._recall(gp, "what calls net")
+    assert out == "GRAPHIFY SLICE: check -> net"  # stripped stdout, verbatim
+    # It shelled out to graphify with the query and graph path.
+    assert calls["cmd"][:2] == ["graphify", "query"]
+    assert gp in calls["cmd"]
+
+
+def _install_fake_mcp(monkeypatch):
+    """Inject a fake `mcp.server.fastmcp.FastMCP` that records registered tools."""
+
+    class _FakeFastMCP:
+        def __init__(self, name):
+            self.name = name
+            self.tools = {}
+
+        def tool(self):
+            def deco(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+
+            return deco
+
+        def run(self):  # pragma: no cover - not exercised here
+            raise AssertionError("server.run() must not be called in tests")
+
+    mod_mcp = types.ModuleType("mcp")
+    mod_server = types.ModuleType("mcp.server")
+    mod_fastmcp = types.ModuleType("mcp.server.fastmcp")
+    mod_fastmcp.FastMCP = _FakeFastMCP
+    monkeypatch.setitem(sys.modules, "mcp", mod_mcp)
+    monkeypatch.setitem(sys.modules, "mcp.server", mod_server)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", mod_fastmcp)
+
+
+def test_build_server_registers_and_invokes_the_four_wrappers(tmp_path, monkeypatch):
+    # Build the server against a stubbed `mcp`, then drive each registered tool
+    # WRAPPER (remember/recall/diff/stats) -- the glue that was previously
+    # untested because the unit tests called the `_private` bodies directly.
+    _install_fake_mcp(monkeypatch)
+    gp = str(tmp_path / "reagraph.json")
+    monkeypatch.setenv("REAGRAPH_GRAPH", gp)
+    monkeypatch.setattr(serve.shutil, "which", lambda _name: None)  # graphify absent
+
+    server = serve.build_server()
+    assert set(server.tools) == {"remember", "recall", "diff", "stats"}
+
+    # remember wrapper -> folds a finding and reports the delta.
+    delta = server.tools["remember"](JAG_PASS2)
+    assert delta["delta"] == {"nodes": 2, "edges": 1}
+
+    # stats wrapper -> reflects the just-merged graph.
+    assert server.tools["stats"]()["nodes"] == 2
+
+    # recall wrapper -> fallback slice (graphify absent).
+    recalled = server.tools["recall"]("what calls net")
+    assert "graphify unavailable" in recalled
+    assert "check" in recalled and "net" in recalled
+
+    # diff wrapper -> structural report over two graph files.
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    g = {"nodes": [{"id": "x"}, {"id": "y"}], "links": [{"source": "x", "target": "y", "relation": "calls"}]}
+    a.write_text(json.dumps(g), encoding="utf-8")
+    b.write_text(json.dumps(g), encoding="utf-8")
+    report = server.tools["diff"](str(a), str(b))
+    assert "Structural diff (byte-agnostic):" in report
+    assert "unchanged nodes : 2" in report
 
 
 def test_graph_path_env_override(tmp_path, monkeypatch):

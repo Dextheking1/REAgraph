@@ -32,17 +32,7 @@ where symbols survive and abstains where they do not, so "unexplained" means
 
 from __future__ import annotations
 
-try:  # the sibling may not be built yet; tests always inject a fake align_fn.
-    from . import align as _align
-except ImportError:  # pragma: no cover - exercised only when align is absent
-    class _AlignStub:
-        @staticmethod
-        def align(src, bing, *, min_confidence=0.5):
-            raise RuntimeError(
-                "reagraph.align is unavailable; pass align_fn=... to attest()"
-            )
-
-    _align = _AlignStub()
+from . import align as _align
 
 
 # A deliberately honest caveat. Kept as a module constant so callers (and tests)

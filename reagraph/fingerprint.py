@@ -6,29 +6,20 @@ the binary's nodes are addresses, the source's are file:line symbols. To line
 them up we lean on signals that survive the compiler:
 
   - `degrees`     : total incident-edge count per node -- the crudest shape.
-  - `wl_labels`   : a Weisfeiler-Lehman color for each node, a stable hash of
-                    its neighbourhood out to `rounds` hops. Two nodes with the
-                    same local structure get the same color in EITHER graph, so
-                    colors are candidate-match keys even across relabelling.
   - `name_key`    : a normalized symbol identity, for the lucky cases where a
                     name survives into the binary (exports, imports, RTTI).
   - `god_nodes`   : the highest-degree hubs -- anchors to seed an alignment from.
 
-Pure stdlib (hashlib only), deterministic, order-independent, and linear per WL
-round so it still runs on a million-node graph. Mirrors `summarize.py`'s plain
-dict degree counting; it does NOT import it.
+The structural (Weisfeiler-Lehman) signal that matches stripped nodes lives in
+`reagraph.align._struct_labels`, a stronger directed, relation-typed variant; it
+consumes only `degrees`/`name_key`/`god_nodes` from here.
+
+Pure stdlib, deterministic, order-independent, and linear so it still runs on a
+million-node graph. Mirrors `summarize.py`'s plain dict degree counting; it does
+NOT import it.
 """
 
 from __future__ import annotations
-
-import hashlib
-
-_HASH_LEN = 16  # hex chars of a WL color -- short but collision-safe enough.
-
-
-def _hash(text: str) -> str:
-    """A short, stable, process-independent hash (NOT Python's salted hash())."""
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:_HASH_LEN]
 
 
 def _node_ids(graph: dict) -> list:
@@ -63,57 +54,6 @@ def degrees(graph: dict) -> dict:
         if t is not None:
             deg[t] = deg.get(t, 0) + 1
     return deg
-
-
-def _in_out_degrees(graph: dict) -> tuple:
-    """(in_degree, out_degree) dicts keyed by node id (endpoint-only ids too)."""
-    ids = _node_ids(graph)
-    ind: dict = {nid: 0 for nid in ids}
-    outd: dict = {nid: 0 for nid in ids}
-    for e in graph.get("links", []) or graph.get("edges", []):
-        s, t = e.get("source"), e.get("target")
-        if s is not None:
-            outd[s] = outd.get(s, 0) + 1
-        if t is not None:
-            ind[t] = ind.get(t, 0) + 1
-    return ind, outd
-
-
-def wl_labels(graph: dict, rounds: int = 3) -> dict:
-    """Weisfeiler-Lehman color refinement -- a structural label per node id.
-
-    Each node starts coloured by its (in_degree, out_degree). Every round, a
-    node's new colour is a short stable hash of its current colour plus the
-    SORTED multiset of its neighbours' colours over BOTH in- and out-neighbours.
-    After `rounds` rounds, two nodes that have structurally identical
-    neighbourhoods (up to `rounds` hops, as undirected-reachable-by-colour) share
-    the same colour -- in this graph OR in any isomorphic relabelling of it.
-
-    Deterministic and order-independent: the result does not depend on node or
-    edge declaration order. Linear per round. Endpoint-only ids are coloured too
-    (as degree-only nodes)."""
-    ids = _node_ids(graph)
-    ind, outd = _in_out_degrees(graph)
-
-    # Initial colour from the (in, out) degree signature.
-    labels = {nid: _hash(f"{ind.get(nid, 0)}|{outd.get(nid, 0)}") for nid in ids}
-
-    # Build neighbour adjacency once (both directions, undirected multiset).
-    neighbours: dict = {nid: [] for nid in ids}
-    for e in graph.get("links", []) or graph.get("edges", []):
-        s, t = e.get("source"), e.get("target")
-        if s is None or t is None:
-            continue
-        neighbours[s].append(t)  # out-neighbour
-        neighbours[t].append(s)  # in-neighbour
-
-    for _ in range(max(0, rounds)):
-        new_labels = {}
-        for nid in ids:
-            neigh = sorted(labels[nid2] for nid2 in neighbours[nid])
-            new_labels[nid] = _hash(labels[nid] + "::" + ",".join(neigh))
-        labels = new_labels
-    return labels
 
 
 # Punctuation we strip when normalizing a symbol into a name key.

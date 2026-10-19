@@ -162,7 +162,7 @@ def _check_graphify() -> dict:
         "name": "graphify",
         "status": "warn",
         "detail": "graphify not found on PATH; optional, only needed for `reagraph query`",
-        "fix": "uv tool install graphify   # optional; only for `reagraph query`",
+        "fix": "uv tool install graphifyy   # optional; only for `reagraph query`",
     }
 
 

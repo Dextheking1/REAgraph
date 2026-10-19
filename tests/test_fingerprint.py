@@ -1,12 +1,10 @@
 """Structural fingerprints: the signals an aligner matches source<->binary on.
 
 Small hand-built graphs are enough to pin down the guarantees: degrees count
-every incident edge; WL colours are the same for structurally-identical nodes,
-different for different ones, stable under reordering, and multiset-invariant
-under isomorphic relabelling; name_key normalizes symbols; god_nodes ranks hubs.
+every incident edge; name_key normalizes symbols; god_nodes ranks hubs. The
+structural (Weisfeiler-Lehman) signal lives in ``reagraph.align`` and is covered
+by the align tests.
 """
-
-from collections import Counter
 
 from reagraph import fingerprint
 
@@ -38,60 +36,6 @@ def test_degrees_include_endpoint_only_nodes():
          "links": [{"source": "x", "target": "ghost", "relation": "calls"}]}
     deg = fingerprint.degrees(g)
     assert deg == {"x": 1, "ghost": 1}
-
-
-def test_wl_same_label_for_structurally_identical_nodes():
-    g = _diamond()
-    labels = fingerprint.wl_labels(g, rounds=3)
-    # a and b have identical neighbourhoods -> identical colour.
-    assert labels["a"] == labels["b"]
-
-
-def test_wl_different_label_for_structurally_different_nodes():
-    g = _diamond()
-    labels = fingerprint.wl_labels(g, rounds=3)
-    # source d and sink c differ structurally.
-    assert labels["c"] != labels["d"]
-    assert labels["a"] != labels["c"]
-    assert labels["a"] != labels["d"]
-
-
-def test_wl_is_stable_across_input_reordering():
-    g = _diamond()
-    # Shuffle nodes and links into a different declaration order.
-    shuffled = {
-        "directed": True,
-        "multigraph": False,
-        "nodes": list(reversed(g["nodes"])),
-        "links": [g["links"][2], g["links"][0], g["links"][3], g["links"][1]],
-    }
-    assert fingerprint.wl_labels(g) == fingerprint.wl_labels(shuffled)
-
-
-def test_wl_endpoint_only_nodes_get_a_colour():
-    g = {"nodes": [{"id": "x"}],
-         "links": [{"source": "x", "target": "ghost", "relation": "calls"}]}
-    labels = fingerprint.wl_labels(g)
-    assert "ghost" in labels and "x" in labels
-    # x (out-only) and ghost (in-only) are structurally different.
-    assert labels["x"] != labels["ghost"]
-
-
-def test_wl_isomorphic_graphs_share_the_same_multiset_of_labels():
-    g = _diamond()
-    # Relabel every id (and label) via a fixed bijection -> isomorphic graph.
-    remap = {"a": "n1", "b": "n2", "c": "n3", "d": "n4"}
-    g2 = {
-        "directed": True,
-        "multigraph": False,
-        "nodes": [{"id": remap[n["id"]], "label": f"{remap[n['id']]}()"}
-                  for n in g["nodes"]],
-        "links": [{"source": remap[e["source"]], "target": remap[e["target"]],
-                   "relation": "calls"} for e in g["links"]],
-    }
-    m1 = Counter(fingerprint.wl_labels(g).values())
-    m2 = Counter(fingerprint.wl_labels(g2).values())
-    assert m1 == m2
 
 
 def test_name_key_normalizes_call_and_case():

@@ -129,6 +129,47 @@ def test_integrity_is_bounded_and_low_confidence_counts_partially():
     assert 0.0 <= r["integrity"] <= 1.0
 
 
+def test_integrity_invariants_self_full_and_monotonic():
+    # Three structural invariants of the integrity score, each deterministic.
+    g = _graph(
+        ["main", "helper", "util"],
+        [("main", "helper", "calls"), ("helper", "util", "calls")],
+    )
+    all_ids = ("main", "helper", "util")
+
+    # (1) A graph vs itself, every node confidently matched -> fully explained.
+    self_fn = _fake_align(
+        matches={i: {"bin": i, "confidence": 1.0, "via": "symbol"} for i in all_ids},
+        src_only=[], bin_only=[],
+    )
+    self_r = attest.attest(g, g, align_fn=self_fn)
+    assert self_r["integrity"] == 1.0
+
+    # (2) Adding an UNEXPLAINED foreign node to the shipped graph must NOT RAISE
+    # integrity (an extra unexplained node can only hold or lower it).
+    bing_foreign = _graph(
+        ["main", "helper", "util", "foreign"],
+        [("main", "helper", "calls"), ("helper", "util", "calls")],
+    )
+    foreign_fn = _fake_align(
+        matches={i: {"bin": i, "confidence": 1.0, "via": "symbol"} for i in all_ids},
+        src_only=[], bin_only=["foreign"],  # the foreign node is unexplained
+    )
+    foreign_r = attest.attest(g, bing_foreign, align_fn=foreign_fn)
+    assert foreign_r["integrity"] <= self_r["integrity"]
+    assert foreign_r["integrity"] < 1.0  # the unexplained node drags it down
+
+    # (3) Making a node confidently matchable must NOT LOWER integrity versus
+    # leaving that same node unmatched (abstained).
+    unmatched_fn = _fake_align(
+        matches={i: {"bin": i, "confidence": 1.0, "via": "symbol"}
+                 for i in ("main", "helper")},
+        src_only=[], bin_only=["util"],  # 'util' abstained rather than matched
+    )
+    unmatched_r = attest.attest(g, g, align_fn=unmatched_fn)
+    assert self_r["integrity"] >= unmatched_r["integrity"]
+
+
 def test_format_report_mentions_score_and_stable_caveat():
     src = _graph(["main", "helper"], [("main", "helper", "calls")])
     bing = _graph(

@@ -27,18 +27,32 @@ import re
 
 from .memory import edge_key
 
-# A source span embedded in a label ("BrowserWindow@7:14-9:4"): "@"? line:col,
-# optionally a range to a second line:col. Stripping it makes a label stable when
-# code merely moves. Only an exact colon-separated numeric span is treated as a
-# range, so a real name with digits ("base64") is never touched.
-_LABEL_RANGE = re.compile(r"@?\d+:\d+(?:-\d+:\d+)?")
+# A source span REA appends to a label ("BrowserWindow@7:14-9:4"): a trailing
+# "@" line:col, optionally a range to a second line:col. Stripping it makes a
+# label stable when code merely moves. The match is ANCHORED to the end of the
+# label (and gated on the "@" REA emits), so an interior "d:d" that is part of a
+# real name -- a verse "1:1", "Genesis 1:1", a version "2:0" -- is never touched.
+_TRAILING_AT_SPAN = re.compile(r"\s*@\d+:\d+(?:-\d+:\d+)?$")
+# A label that is ENTIRELY a bare position RANGE ("7:14-9:4") -- an anonymous
+# node REA names only by span -- is just a source location, so drop it whole. The
+# required "-" range form keeps a lone "d:d" (which could be a real name) intact.
+_WHOLE_SPAN = re.compile(r"^\d+:\d+-\d+:\d+$")
 
 
 def normalize_label(label):
-    """Strip embedded source line:col ranges from a label (for stable matching)."""
+    """Strip a trailing/whole-label source span from a label (for stable matching).
+
+    Only two clearly-positional shapes are removed: a trailing ``@line:col`` span
+    (optionally a ``-line:col`` range) that REA appends to a symbol name, and a
+    label that is entirely a bare ``line:col-line:col`` range. An interior
+    ``digits:digits`` that is part of a real name is left UNCHANGED.
+    """
     if not isinstance(label, str):
         return label
-    return _LABEL_RANGE.sub("", label).strip()
+    s = _TRAILING_AT_SPAN.sub("", label)
+    if _WHOLE_SPAN.match(s):
+        s = ""
+    return s.strip()
 
 
 # Node kinds whose SOURCE FILE is not a stable part of their identity, because the

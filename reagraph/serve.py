@@ -51,26 +51,13 @@ def _as_fragment(finding) -> dict:
 
 
 def load_any_dict(doc: dict) -> dict:
-    """In-memory twin of ingest.load_any: node-link vs JAG auto-detect on a dict."""
-    # Write-free reuse of ingest's detection by round-tripping through ingest_jag
-    # when the doc looks like a JAG, else treat as node-link.
-    from .ingest import ingest_jag
+    """In-memory twin of ingest.load_any: node-link vs JAG auto-detect on a dict.
 
-    if "links" in doc:
-        out = dict(doc)
-        out.setdefault("nodes", [])
-        return out
-    looks_like_jag = any(
-        "epistemic" in e for e in doc.get("edges", []) if isinstance(e, dict)
-    ) or any("epistemic" in n for n in doc.get("nodes", []) if isinstance(n, dict))
-    if looks_like_jag:
-        return ingest_jag(doc)
-    return {
-        "directed": True,
-        "multigraph": False,
-        "nodes": doc.get("nodes", []),
-        "links": doc.get("edges", []),
-    }
+    Thin pass-through to the shared ``ingest.normalize_doc`` autodetect so the
+    classification lives in exactly one place."""
+    from .ingest import normalize_doc
+
+    return normalize_doc(doc)
 
 
 def _remember(graph_path: str, finding) -> dict:

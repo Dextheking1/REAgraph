@@ -142,3 +142,53 @@ def test_normalize_label_strips_only_ranges():
     assert diff.normalize_label("telemetry:send") == "telemetry:send"  # not a range
     assert diff.normalize_label("base64") == "base64"  # digits, not a range
     assert diff.normalize_label(None) is None
+
+
+def test_normalize_label_strips_trailing_at_span():
+    # The @-prefixed trailing span REA emits is removed (single position or range).
+    assert diff.normalize_label("handler@24:33-28:1") == "handler"
+    assert diff.normalize_label("BrowserWindow@7:14-9:4") == "BrowserWindow"
+    assert diff.normalize_label("loadConfig@3:0") == "loadConfig"  # single position
+    # A bare position RANGE that is the whole label is an anonymous node -> dropped.
+    assert diff.normalize_label("7:14-9:4") == ""
+    # And the @-only form (anonymous node) drops to empty too.
+    assert diff.normalize_label("@7:14-9:4") == ""
+
+
+def test_normalize_label_preserves_interior_colon_numbers():
+    # These are NOT trailing @-spans and NOT whole-label ranges: an interior
+    # "d:d" that is part of a real name must survive UNCHANGED (the latent trap:
+    # the old regex mangled every one of these).
+    assert diff.normalize_label("1:1") == "1:1"  # a lone position / verse ref
+    assert diff.normalize_label("Genesis 1:1") == "Genesis 1:1"
+    assert diff.normalize_label("3:14") == "3:14"
+    assert diff.normalize_label("2:0") == "2:0"  # a version string
+    assert diff.normalize_label("base64") == "base64"
+    assert diff.normalize_label("config:3:14:reload") == "config:3:14:reload"
+
+
+def test_two_builds_differing_only_by_at_span_match_under_signature():
+    # The whole point: a node whose ONLY change is its @line:col source span
+    # (code moved) must still match across builds under rea_signature.
+    a = _graph([_n("a1", "function", "handler@24:33-28:1", "src/ipc.js")])
+    b = _graph([_n("z1", "function", "handler@40:12-44:7", "src/ipc.js")])
+
+    sig = diff.diff(a, b, signature=diff.rea_signature)
+    assert sig["summary"]["nodes_added"] == 0
+    assert sig["summary"]["nodes_removed"] == 0
+    assert sig["summary"]["unchanged_nodes"] == 1
+
+
+def test_interior_colon_number_is_not_mangled_in_signature():
+    # Two builds where a label legitimately contains "1:1": the signature must
+    # match them (not drop the "1:1"), and must NOT collide "1:1" with "2:2".
+    a = _graph([_n("a1", "verse", "Genesis 1:1", "book.txt")])
+    b = _graph([_n("z1", "verse", "Genesis 1:1", "book.txt")])
+    same = diff.diff(a, b, signature=diff.rea_signature)
+    assert same["summary"]["unchanged_nodes"] == 1
+    assert same["summary"]["nodes_added"] == 0
+
+    c = _graph([_n("z1", "verse", "Genesis 2:2", "book.txt")])
+    diffed = diff.diff(a, c, signature=diff.rea_signature)
+    assert diffed["summary"]["nodes_added"] == 1
+    assert diffed["summary"]["nodes_removed"] == 1

@@ -107,6 +107,22 @@ def test_report_is_a_string_mentioning_the_verdict(monkeypatch):
     assert "pip install mcp" in failed
 
 
+def test_graphify_fix_names_the_graphifyy_pypi_package(monkeypatch):
+    # The PyPI distribution is `graphifyy` (double y); the CLI binary it installs
+    # is `graphify`. The doctor's install hint must point at the real package.
+    _nothing_present(monkeypatch)  # graphify absent -> the warn branch with a fix
+    graphify_check = next(c for c in doctor.check() if c["name"] == "graphify")
+    assert "uv tool install graphifyy" in graphify_check["fix"]
+    # Must NOT tell the user to install a package named "graphify " (single y).
+    assert "install graphify " not in graphify_check["fix"]
+    assert "install graphify\n" not in graphify_check["fix"]
+
+    # The same corrected hint must surface in the rendered report.
+    report = doctor.report()
+    assert "uv tool install graphifyy" in report
+    assert "uv tool install graphify " not in report
+
+
 def test_check_does_not_spawn_or_hit_the_network(monkeypatch):
     # Guard: if any branch tried to run a process, this would blow up.
     import subprocess

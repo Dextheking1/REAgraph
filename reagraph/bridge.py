@@ -45,22 +45,12 @@ def _normalize(doc: dict) -> dict:
     """
     if not isinstance(doc, dict):
         raise ValueError(f"finding is not a dict: {type(doc).__name__}")
-    if "links" in doc:
-        doc.setdefault("nodes", [])
-        return doc
-    looks_like_jag = any(
-        "epistemic" in e for e in doc.get("edges", []) if isinstance(e, dict)
-    ) or any("epistemic" in n for n in doc.get("nodes", []) if isinstance(n, dict))
-    if looks_like_jag:
-        return ingest.ingest_jag(doc)
-    if "nodes" in doc or "edges" in doc:
-        return {
-            "directed": True,
-            "multigraph": False,
-            "nodes": doc.get("nodes", []),
-            "links": doc.get("edges", []),
-        }
-    raise ValueError("finding has no nodes/links/edges")
+    # Reject a finding carrying none of the graph keys (the bridge is stricter
+    # than the file loaders: a malformed finding must be skippable). Anything with
+    # at least one of these routes through the shared autodetect below.
+    if "links" not in doc and "nodes" not in doc and "edges" not in doc:
+        raise ValueError("finding has no nodes/links/edges")
+    return ingest.normalize_doc(doc)
 
 
 def _is_empty(fragment: dict) -> bool:

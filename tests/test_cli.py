@@ -414,7 +414,7 @@ def test_build_parser_lists_every_expected_subcommand():
     expected = {
         "add", "diff", "compare", "stats", "summary", "coverage", "query",
         "pull", "attest", "cache", "doctor", "serve", "serve-cache",
-        "install-skill",
+        "install-skill", "setup-rea",
     }
     assert choices == expected
 

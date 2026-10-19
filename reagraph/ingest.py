@@ -57,13 +57,27 @@ def ingest_jag(doc: dict) -> dict:
     return {"directed": True, "multigraph": False, "nodes": nodes, "links": links}
 
 
-def load_any(path) -> dict:
-    """Load a file as a node-link fragment, auto-detecting JAG vs node-link."""
-    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+def normalize_doc(doc: dict) -> dict:
+    """Classify an already-loaded dict and return a node-link fragment.
+
+    The single source of truth for the "is this a JAG or a node-link graph?"
+    autodetect shared by ``load_any`` (file wrapper), ``bridge._normalize`` and
+    ``serve.load_any_dict``:
+
+      - already node-link (has ``links``) -> passed through (with ``nodes``
+        defaulted), as a shallow COPY so the caller's dict is never mutated,
+      - a JAG doc (nodes/edges carry an ``epistemic`` marker) -> mapped via
+        ``ingest_jag``,
+      - a plain ``{nodes, edges}`` graph (the "edges" spelling) -> rewritten to
+        node-link.
+
+    Pure: never mutates ``doc`` and never reads the disk.
+    """
     # Already node-link? (has links, or edges without an epistemic marker)
     if "links" in doc:
-        doc.setdefault("nodes", [])
-        return doc
+        out = dict(doc)
+        out.setdefault("nodes", [])
+        return out
     looks_like_jag = any("epistemic" in e for e in doc.get("edges", []) if isinstance(e, dict)) or any(
         "epistemic" in n for n in doc.get("nodes", []) if isinstance(n, dict)
     )
@@ -71,3 +85,9 @@ def load_any(path) -> dict:
         return ingest_jag(doc)
     # Plain {nodes, edges} node-link with the "edges" spelling.
     return {"directed": True, "multigraph": False, "nodes": doc.get("nodes", []), "links": doc.get("edges", [])}
+
+
+def load_any(path) -> dict:
+    """Load a file as a node-link fragment, auto-detecting JAG vs node-link."""
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    return normalize_doc(doc)
