@@ -69,8 +69,18 @@ preflight -> probe with REA -> fold findings into memory -> recall before re-pro
 
 ## Running REA (the analysis engine)
 
-REA is a Node MCP server. The default command is `npx -y rea-agents@latest --mcp`
-(override with `--rea-cmd` or `$REAGRAPH_REA_CMD`). Two things to know:
+**One-command setup (recommended):** `reagraph setup-rea` builds a local, pinned
+REA MCP-server Docker image and prints the exact `REAGRAPH_REA_CMD` to export — no
+REA repo, no hand-built docker string, no macOS Swift issue. Then:
+
+```bash
+reagraph setup-rea
+export REAGRAPH_REA_CMD='docker run --rm -i -v "$PWD":/work:ro reagraph-rea:6.7.0'
+reagraph pull /work/app.asar --graph reagraph.json   # run from your app's dir
+```
+
+Under the hood REA is a Node MCP server (`rea-agents --mcp`); you can also override
+`--rea-cmd` / `$REAGRAPH_REA_CMD` manually. Things to know:
 
 - **On macOS, run REA in Docker/Linux.** Its analyzer needs a toolchain (Swift)
   that older Xcode CLTs lack. See `examples/rea-docker/` for a ready image. Point

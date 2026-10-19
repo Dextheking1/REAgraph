@@ -100,7 +100,13 @@ uv tool install reagraph              # the reagraph CLI, isolated, on your PATH
 uv tool install "reagraph[live]"      # + mcp, for the live pull / serve / compare paths
 
 reagraph install-skill                # install the /reagraph agent skill into ~/.claude/skills
+reagraph setup-rea                    # build a local pinned REA image (no external REA repo needed)
 ```
+
+REAgraph runs REA as a separate process and vendors no REA code; `reagraph
+setup-rea` builds a pinned REA Docker image locally (from a Graphify-Labs mirror of
+REA, MIT) and prints the exact `REAGRAPH_REA_CMD` — so you never visit the REA repo
+or hand-assemble a docker command.
 
 No install needed to try it: `uvx reagraph diff a.json b.json`. Prefer pip? `pip
 install "reagraph[live]"`. Development from a checkout: `uv pip install -e ".[live]"`.
