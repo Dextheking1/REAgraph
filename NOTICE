@@ -5,8 +5,15 @@ This product is an independent work. It is designed to interoperate with, but is
 NOT affiliated with, endorsed by, or derived from:
 
   - REA ("Reverse Engineer Anything"), https://github.com/morluto/rea (MIT).
-    "REA" and any related marks belong to their respective owners. REAgraph
-    consumes REA's output formats; it includes no REA source code.
+    "REA" and any related marks belong to their respective owners. The REAgraph
+    source tree itself includes no REA source code; it consumes REA's output
+    formats and runs REA as a separate process. For reproducibility and to avoid
+    depending on the upstream repository's availability, Graphify Labs maintains a
+    pinned mirror of REA at https://github.com/Graphify-Labs/rea (MIT, forked from
+    morluto/rea), which REAgraph's reference Docker image targets. REA is licensed
+    MIT; its copyright and license are preserved in that mirror. This mirror is an
+    unmodified pinned copy for reproducibility; it does not imply affiliation with
+    or endorsement by the upstream REA project.
   - graphify, https://github.com/Graphify-Labs/graphify (Apache-2.0). REAgraph
     writes graphs in graphify's node-link JSON format and delegates query/path/
     explain to graphify when it is installed.
